@@ -496,6 +496,18 @@ fn uploads_create_files_and_directories() {
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 200 OK");
     assert!(text(body).contains("This directory is empty."));
+
+    // Nested paths used by the folder uploader.
+    let response = put(port, "/assets/tree/", b"");
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    let response = put(port, "/assets/tree/sub/", b"");
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    let response = put(port, "/assets/tree/sub/file.txt", b"nested");
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    let response = get(port, "/assets/tree/sub/file.txt");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"nested");
     assert!(text(&get(port, "/assets/")).contains("data-upload=\"1\""));
 
     let response = put(port, "/assets/nested/", b"");
@@ -598,6 +610,8 @@ fn multipart_forms_work_for_old_browsers() {
     assert!(page.contains("background: #101216"));
     assert!(page.contains("prefers-color-scheme: dark"));
     assert!(!page.contains("var(--"));
+    assert!(page.contains("webkitdirectory"));
+    assert!(page.contains("webkitRelativePath"));
 
     // Classic form post to a directory: filename comes from the part.
     let body = multipart_body("----syswebForm", "old.txt", b"hello from a form");

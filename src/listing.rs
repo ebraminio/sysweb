@@ -138,12 +138,13 @@ const JS: &[u8] = br###"
   }
 
   var path = attr(body, 'data-path') || window.location.pathname;
+  if (path.charAt(path.length - 1) !== '/') path += '/';
   var canUpload = attr(body, 'data-upload') === '1';
 
-  function putFile(file, done, fail) {
+  function putFileAt(file, relative, done, fail) {
     var xhr = createXhr();
     if (!xhr) { fail('XMLHttpRequest is not available'); return; }
-    try { xhr.open('PUT', path + encodeURIComponent(file.name)); }
+    try { xhr.open('PUT', path + relative); }
     catch (e) { fail('Cannot start upload'); return; }
     if (xhr.upload && xhr.upload.onprogress) {
       xhr.upload.onprogress = function (event) {
@@ -163,6 +164,28 @@ const JS: &[u8] = br###"
     catch (e) { fail(file.name + ': cannot send file'); }
   }
 
+  function putFile(file, done, fail) {
+    putFileAt(file, encodeURIComponent(file.name), done, fail);
+  }
+
+  function mkdirRequest(relative, done, fail) {
+    var xhr = createXhr();
+    if (!xhr) { fail('XMLHttpRequest is not available'); return; }
+    try { xhr.open('PUT', path + relative + '/'); }
+    catch (e) { fail('Cannot create folder'); return; }
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      if ((xhr.status >= 200 && xhr.status < 300) || xhr.status === 409) {
+        done();
+        return;
+      }
+      var text = '';
+      try { text = xhr.responseText || ''; } catch (e) {}
+      fail(xhr.status + ' ' + text);
+    };
+    xhr.send(null);
+  }
+
   function uploadAll(files) {
     if (!files || !files.length) return;
     var index = 0;
@@ -175,6 +198,66 @@ const JS: &[u8] = br###"
     next();
   }
 
+  function splitPath(value) {
+    var parts = [];
+    var start = 0;
+    for (var i = 0; i <= value.length; i++) {
+      if (i === value.length || value.charAt(i) === '/') {
+        if (i > start) parts.push(value.substring(start, i));
+        start = i + 1;
+      }
+    }
+    return parts;
+  }
+
+  function encodeSegments(parts, count) {
+    var encoded = '';
+    for (var i = 0; i < count; i++) {
+      if (i) encoded += '/';
+      encoded += encodeURIComponent(parts[i]);
+    }
+    return encoded;
+  }
+
+  function ensureDirs(parts, count, made, done, fail) {
+    var index = 0;
+    function next() {
+      if (index >= count) { done(); return; }
+      var relative = encodeSegments(parts, index + 1);
+      var key = 'd' + relative;
+      if (made[key]) { index++; next(); return; }
+      mkdirRequest(relative, function () {
+        made[key] = 1;
+        index++;
+        next();
+      }, fail);
+    }
+    next();
+  }
+
+  function uploadTree(files) {
+    if (!files || !files.length) return;
+    var made = {};
+    var index = 0;
+    function fail(message) { setStatus(message); }
+    function next() {
+      if (index >= files.length) { location.reload(); return; }
+      var file = files[index++];
+      var relative = file.webkitRelativePath || file.name;
+      var parts = splitPath(relative);
+      if (!parts.length) { fail('Invalid folder path'); return; }
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i] === '.' || parts[i] === '..') { fail('Invalid folder path'); return; }
+      }
+      var dirCount = parts.length - 1;
+      ensureDirs(parts, dirCount, made, function () {
+        setStatus('Uploading ' + relative);
+        putFileAt(file, encodeSegments(parts, parts.length), next, fail);
+      }, fail);
+    }
+    next();
+  }
+
   if (canUpload) {
     var input = byId('file');
     var probe = createXhr();
@@ -183,22 +266,25 @@ const JS: &[u8] = br###"
       reveal(byId('js-tools'), '');
       if (input) addEvent(input, 'change', function () { uploadAll(input.files); });
 
+      var folder = byId('folder');
+      if (folder) {
+        if (!('webkitdirectory' in folder)) {
+          var folderLabel = byId('folder-label');
+          if (folderLabel) folderLabel.style.display = 'none';
+        } else {
+          addEvent(folder, 'change', function () { uploadTree(folder.files); });
+        }
+      }
+
       var mkdir = byId('mkdir');
       if (mkdir) addEvent(mkdir, 'click', function () {
         var name = prompt('Folder name');
         if (!name) return;
-        var xhr = createXhr();
-        if (!xhr) { setStatus('XMLHttpRequest is not available'); return; }
-        try { xhr.open('PUT', path + encodeURIComponent(name) + '/'); }
-        catch (e) { setStatus('Cannot create folder'); return; }
-        xhr.onreadystatechange = function () {
-          if (xhr.readyState !== 4) return;
-          if (xhr.status >= 200 && xhr.status < 300) { location.reload(); return; }
-          var text = '';
-          try { text = xhr.responseText || ''; } catch (e) {}
-          setStatus(xhr.status + ' ' + text);
-        };
-        xhr.send(null);
+        mkdirRequest(encodeURIComponent(name), function () {
+          location.reload();
+        }, function (message) {
+          setStatus(message);
+        });
       });
 
       var drop = byId('drop');
@@ -325,6 +411,9 @@ pub fn render<P: Platform>(
             || !out.push(b"<div id=\"js-tools\" class=\"tools js-only\">")
             || !out.push(
                 b"<label class=\"btn primary\">Upload<input id=\"file\" type=\"file\" multiple></label>",
+            )
+            || !out.push(
+                b"<label id=\"folder-label\" class=\"btn\">Upload folder<input id=\"folder\" type=\"file\" webkitdirectory multiple></label>",
             )
             || !out.push(
                 b"<button id=\"mkdir\" class=\"btn\" type=\"button\">New folder</button>",
