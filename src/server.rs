@@ -294,6 +294,7 @@ impl<P: Platform> Server<P> {
 
     fn handle_post(&mut self, stream: &mut P::Stream, request: &http::Request<'_>, raw: &[u8]) {
         if !self.config.upload() {
+            self.drain_request_body(stream, request, raw);
             self.send_error(stream, Status::MethodNotAllowed, false, ALLOW_READ);
             return;
         }
@@ -306,12 +307,14 @@ impl<P: Platform> Server<P> {
             }
         };
         if content_length > MAX_MULTIPART {
+            self.drain_request_body(stream, request, raw);
             self.send_error(stream, Status::PayloadTooLarge, false, b"");
             return;
         }
         let content_type = match request.content_type {
             Some(value) => value,
             None => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::UnsupportedMediaType, false, b"");
                 return;
             }
@@ -319,14 +322,17 @@ impl<P: Platform> Server<P> {
         let mut parser = match multipart::Parser::new(content_type, MAX_MULTIPART) {
             Ok(parser) => parser,
             Err(multipart::ParseError::UnsupportedContentType) => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::UnsupportedMediaType, false, b"");
                 return;
             }
             Err(multipart::ParseError::TooLarge) => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::PayloadTooLarge, false, b"");
                 return;
             }
             Err(_) => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::BadRequest, false, b"");
                 return;
             }
@@ -336,10 +342,12 @@ impl<P: Platform> Server<P> {
         let url_len = match path::normalize(request.target, &mut url_path) {
             Ok(len) => len,
             Err(path::PathError::TooLong) => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::UriTooLong, false, b"");
                 return;
             }
             Err(_) => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::BadRequest, false, b"");
                 return;
             }
@@ -445,6 +453,7 @@ impl<P: Platform> Server<P> {
 
     fn handle_put(&mut self, stream: &mut P::Stream, request: &http::Request<'_>, raw: &[u8]) {
         if !self.config.upload() {
+            self.drain_request_body(stream, request, raw);
             self.send_error(stream, Status::MethodNotAllowed, false, ALLOW_READ);
             return;
         }
@@ -453,15 +462,18 @@ impl<P: Platform> Server<P> {
         let url_len = match path::normalize(request.target, &mut url_path) {
             Ok(len) => len,
             Err(path::PathError::TooLong) => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::UriTooLong, false, b"");
                 return;
             }
             Err(_) => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::BadRequest, false, b"");
                 return;
             }
         };
         if url_len == 1 {
+            self.drain_request_body(stream, request, raw);
             self.send_error(stream, Status::BadRequest, false, b"");
             return;
         }
@@ -469,6 +481,7 @@ impl<P: Platform> Server<P> {
         let rel_path = root_relative(&url_path[..url_len]);
 
         if url_path[..url_len].ends_with(b"/") {
+            self.drain_request_body(stream, request, raw);
             match self.platform.create_dir(rel_path) {
                 Ok(()) => {
                     if self.send_body(
@@ -512,6 +525,7 @@ impl<P: Platform> Server<P> {
             }
         };
         if content_length > MAX_UPLOAD {
+            self.drain_request_body(stream, request, raw);
             self.send_error(stream, Status::PayloadTooLarge, false, b"");
             return;
         }
@@ -519,18 +533,22 @@ impl<P: Platform> Server<P> {
         let mut file = match self.platform.create_file(rel_path, self.config.replace()) {
             Ok(file) => file,
             Err(Error::AlreadyExists) | Err(Error::IsADirectory) => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::Conflict, false, b"");
                 return;
             }
             Err(Error::NotFound) => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::NotFound, false, b"");
                 return;
             }
             Err(Error::PermissionDenied) => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::Forbidden, false, b"");
                 return;
             }
             Err(_) => {
+                self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::InternalServerError, false, b"");
                 return;
             }
@@ -775,6 +793,37 @@ impl<P: Platform> Server<P> {
             return false;
         }
         true
+    }
+
+    /// Drain a small, already-announced request body before closing. Closing
+    /// with unread input can turn the final FIN into a reset on some stacks
+    /// (notably macOS), which can discard the response the client is reading.
+    fn drain_request_body(
+        &mut self,
+        stream: &mut P::Stream,
+        request: &http::Request<'_>,
+        raw: &[u8],
+    ) {
+        if request.expect_continue {
+            return;
+        }
+        let Some(length) = request.content_length else {
+            return;
+        };
+        let buffered = raw.len().saturating_sub(request.body_offset) as u64;
+        let mut remaining = length.saturating_sub(core::cmp::min(buffered, length));
+        const MAX_DRAIN: u64 = 64 * 1024;
+        if remaining == 0 || remaining > MAX_DRAIN {
+            return;
+        }
+        let mut buffer = [0u8; 4096];
+        while remaining > 0 {
+            let want = core::cmp::min(remaining, buffer.len() as u64) as usize;
+            match self.platform.read(stream, &mut buffer[..want]) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => remaining -= count as u64,
+            }
+        }
     }
 
     fn send_error(
