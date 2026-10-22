@@ -22,7 +22,8 @@ runtime, no heap, and, on Linux, no libc at all.
 > Status: **milestone 0.5** — blocking, single-threaded. Static files,
 > built-in directory indexes, opt-in raw `PUT` uploads, classic
 > `multipart/form-data` form uploads for old/no-JavaScript browsers, folder
-> creation, `sendfile` file serving, HTTP/1.0 and 1.1, `Connection: close`.
+> creation, `sendfile` file serving, single-range HTTP 206/416 responses,
+> HTTP/1.0 and 1.1, `Connection: close`.
 > The async reactor is the next milestone; see [ROADMAP.md](ROADMAP.md).
 
 ## Why
@@ -115,6 +116,9 @@ curl -T ./report.pdf http://127.0.0.1:8080/files/report.pdf
 # classic form upload (works from old browsers / curl -F)
 curl -F "file=@./report.pdf" http://127.0.0.1:8080/files/
 
+# single byte range (206 Partial Content)
+curl -r 0-1023 http://127.0.0.1:8080/files/report.pdf -o report.head
+
 # create a directory (trailing slash matters)
 curl -X PUT http://127.0.0.1:8080/files/notes/
 
@@ -123,10 +127,12 @@ curl -X PUT http://127.0.0.1:8080/files/notes/
 curl -T ./new.txt http://127.0.0.1:8080/files/report.txt
 ```
 
-The built-in index also contains a plain HTML form
-(`method=post enctype=multipart/form-data`) inside `<noscript>`, so a browser
-with JavaScript disabled can upload one file. Classic form posts take the
-filename from the part; a post to `/files/fixed.txt` uses the URL path instead.
+The built-in index always contains a plain HTML form
+(`method=post enctype=multipart/form-data`). Modern JavaScript hides it after
+detecting the File API and shows the drag/drop tools; a browser with
+JavaScript disabled, or an old browser without those APIs, keeps the classic
+form and can still upload one file. Classic form posts take the filename from
+the part; a post to `/files/fixed.txt` uses the URL path instead.
 
 The server answers `201 Created` on uploads and folder creation, `409 Conflict`
 when a file exists without `--replace`, `411 Length Required` when a file
@@ -170,9 +176,14 @@ only when you mean it; this server has no TLS, authentication, or rate limiting.
   cap, exact streaming (no heap), and cleanup of failed partial files;
 - classic `multipart/form-data` `POST` uploads for old browsers, parsed by a
   streaming state machine with a 32 KiB buffer and no whole-body buffering;
-  the no-JS form is part of the index page;
+  the inline JS stays in an ES3-style, feature-detected subset (no `Promise`,
+  `querySelectorAll`, `dataset`, `classList`, `fetch`, arrow functions, or
+  `const`/`let`), and the classic form remains visible if it cannot initialize;
 - file responses use `sendfile`, so the file is never copied through a
   16 KiB userspace loop;
+- single `Range: bytes=start-end`, `start-`, and `-suffix` requests with
+  `206 Partial Content`, `Content-Range`, `Accept-Ranges: bytes`, and `416`
+  for unsatisfiable ranges; multi-ranges are ignored (full 200);
 - `PUT /dir/` creates one directory; `--replace` opts into overwriting;
 - `--no-index` disables generated listings (403 for directories without
   `index.html`);
@@ -293,8 +304,10 @@ This is a milestone, not a hardened internet-facing server:
 - classic form posts upload one file per request; `filename*` (RFC 5987) and
   multi-file form fields are not parsed yet;
 - the old-browser page is functional but the CSS assumes a reasonably modern
-  layout engine;
-- no delete, rename, Range, `ETag`, `Last-Modified`, or `Date` yet;
+  layout engine; JS uploads need `File`/XHR, otherwise the classic form is the
+  fallback;
+- no delete, rename, multi-range responses, `If-Range`, `ETag`,
+  `Last-Modified`, or `Date` yet;
 - no CORS, cross-origin isolation, prefix, or inactivity timeout yet;
 - all symlinks beneath the root are denied; the root path itself may be a
   symlink (it is opened once at startup);
@@ -315,7 +328,7 @@ The next milestone is the async reactor abstraction:
 - uploads integrated into the state machine; directory listing stays bounded;
 - timeouts, keep-alive, connection limits;
 - Windows CRT-free entry and build recipe;
-- Range/conditional requests, delete/rename, auth, CORS, prefix;
+- conditional requests, multi-range, delete/rename, auth, CORS, prefix;
 - `splice`/io_uring zero-copy paths beyond `sendfile`;
 - multi-file multipart forms and `filename*` support;
 - broader OSS-Fuzz onboarding and a larger CI matrix.

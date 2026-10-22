@@ -135,7 +135,7 @@ contains a `<noscript>` multipart form for browsers without JavaScript.
 | Rename / move | ❌ | opt-in, two-step, containment-checked |
 | Basic auth | ❌ | `--userpass` |
 | CORS / cross-origin isolation | ❌ | opt-in headers |
-| Range downloads | ❌ | milestone 1 |
+| Range downloads | ✅ single range; multi-range ignored | — |
 | Conditional GET (`ETag`) | ❌ | milestone 1 |
 | Inactivity timeout | ❌ | milestone 1 |
 | Port fallback | ✅ when the default port is implicit | — |

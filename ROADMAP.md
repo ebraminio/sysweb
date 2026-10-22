@@ -23,7 +23,7 @@ The current release (milestone 0.5).
       requirement.
 - [x] HTTP/1.0 and HTTP/1.1 request parsing for `GET`/`HEAD`/`PUT`.
 - [x] `Content-Length` and `Expect: 100-continue`; chunked bodies rejected.
-- [x] Static files, `index.html`, MIME table, `sendfile`.
+- [x] Static files, `index.html`, MIME table, `sendfile`, single-range 206/416.
 - [x] Built-in directory index with metadata, breadcrumbs, sorting, and a
       self-contained 64 KiB HTML/CSS/JS page.
 - [x] Opt-in raw `PUT` uploads, folder creation, `--replace`, 1 GiB cap, and
@@ -58,8 +58,8 @@ The current release (milestone 0.5).
       section.
 
 **Known gaps:** single-threaded blocking, no timeouts, no keep-alive, no `Date`,
-no `Range`, no auth/delete/rename, classic forms accept one file, macOS Intel
-unsupported, no Windows backend.
+no multi-range/`If-Range`, no auth/delete/rename, classic forms accept one file,
+macOS Intel unsupported, no Windows backend.
 Minimums are Linux 5.6+, macOS 11+, and Windows 10 1809+; there are no legacy
 fallbacks.
 
@@ -76,12 +76,12 @@ Make the blocking server pleasant and safe enough to run on a LAN.
       civil-from-days conversion, all on the stack.
 - [ ] `Last-Modified` and `ETag` from `st_mtime` + `st_size`.
 - [ ] `If-Modified-Since` / `If-None-Match` → 304.
-- [ ] `Range: bytes=...` with a single range → 206 + `Content-Range`; reject
-      multi-range with 416 or ignore per policy.
 - [ ] `Keep-Alive` with a bounded request count and idle timeout.
 - [ ] `HEAD` for every error path (already done, keep under test).
 - [ ] Optional `OPTIONS`/`TRACE` policy: 405 with `Allow` is fine.
 - [ ] Multi-file multipart forms and RFC 5987 `filename*` names.
+- [ ] Optional: keep the legacy page usable on very old layout engines with a
+      simpler stylesheet.
 - [ ] Listing pagination or chunked rendering for directories whose page
       exceeds 64 KiB.
 
@@ -203,7 +203,7 @@ Acceptance: a `.exe` that serves the same test suite, imports no
 
 ## M5 — Protocol and operations 🗺️
 
-- [ ] Conditional requests and ranges from M1 fully integrated with async.
+- [ ] Conditional requests (`ETag`/`If-Range`) integrated with async.
 - [ ] Configurable MIME overrides and custom headers.
 - [ ] Directory index policy (index file list, no generated listing).
 - [ ] Optional access log format (still fixed-buffer).

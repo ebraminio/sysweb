@@ -314,9 +314,12 @@ not implemented yet.
    against the root fd. `append_index` is applied only for directory URLs.
 5. `Platform::open` opens the relative path read-only with no-symlink
    resolution. `file_info` gets size, mode, and mtime.
-6. A regular file is sent with `sendfile`. `HEAD` sends only the header. The
-   loop stops after exactly `Content-Length` bytes, so a growing file cannot
-   overrun the advertised length. Linux blocks `SIGPIPE` process-wide; macOS
+6. A regular file is sent with `sendfile`. A single `Range` header resolves to
+   an offset and length before headers are written; `206` carries
+   `Content-Range`, and an unsatisfiable range gets `416` with
+   `Content-Range: bytes */total`. `HEAD` sends only the header. The loop stops
+   after exactly `Content-Length` bytes, so a growing file cannot overrun the
+   advertised length. Linux blocks `SIGPIPE` process-wide; macOS
    sets `SO_NOSIGPIPE` on every accepted socket, so a client disconnect yields
    `EPIPE` instead of killing the server.
 7. A directory URL without a trailing slash gets a 301 to the slashed form. A
@@ -351,9 +354,13 @@ parser:
 - file bytes are handed to the `Sink` as they are confirmed, so the 1 GiB cap
   is enforced without allocating;
 - a failed or truncated part is unlinked by the sink;
-- the directory page includes a `<noscript>` form with
-  `method=post enctype=multipart/form-data`; modern browsers keep using
-  `XMLHttpRequest`/`PUT` with progress.
+- the directory page always includes a form with
+  `method=post enctype=multipart/form-data`; modern JS detects the File API,
+  hides the form, and uses `XMLHttpRequest`/`PUT` with progress. If the File
+  API or modern APIs are absent, the form remains and still works. The inline
+  JS is intentionally ES3-style and feature-detected: no `Promise`,
+  `querySelectorAll`, `dataset`, `classList`, `fetch`, arrow functions, or
+  `const`/`let`.
 
 `POST` is only accepted when `--upload` is set; non-multipart posts get 415, a
 missing file part 400, and conflicts follow the same `--replace` rules as PUT.
@@ -578,7 +585,8 @@ several.
 - Unit tests for request parsing (including `Content-Length`/`Expect`), path
   normalization/joining, MIME, config, listing formatting, and `FixedBuf`.
 - Five end-to-end tests spawn the real binary over loopback and cover GET,
-  HEAD, binary bodies, `sendfile` for an 8 MiB file, directory indexes,
+  HEAD, binary bodies, `sendfile` for an 8 MiB file, `Range`/`206`/`416`,
+  directory indexes,
   breadcrumbs/metadata, HTML escaping, symlink denial, 301 redirects,
   404/405/505/400/409/411/413/415, `--no-index`, raw uploads, folder creation,
   `--replace`, missing length, `Expect: 100-continue`, traversal attempts, and
@@ -590,7 +598,7 @@ several.
   multipart state machine; `tests/security.rs` sends adversarial and
   randomized requests to the real binary and checks status bounds, timeouts,
   process survival, and outside-file leakage.
-- Future: fuzz the listing escaper too; property-test the path invariant
+- Future: fuzz the listing escaper and the range resolver too; property-test the path invariant
   (`..` cannot survive normalization) more deeply; soak-test the async reactor
   and slow uploads.
 
