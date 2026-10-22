@@ -67,7 +67,9 @@ jobs:
         run: |
           for target in http path multipart; do
             echo "::group::fuzz $target"
-            cargo fuzz run "$target" "fuzz/seeds/$target" -- -timeout=5 -max_total_time=20 -rss_limit_mb=2048
+            mkdir -p "fuzz/corpus/$target"
+            cp "fuzz/seeds/$target/"* "fuzz/corpus/$target/"
+            cargo fuzz run "$target" "fuzz/corpus/$target" -- -timeout=5 -max_total_time=20 -rss_limit_mb=2048
             echo "::endgroup::"
           done
 

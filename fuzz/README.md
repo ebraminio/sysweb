@@ -18,13 +18,17 @@ normal suite.
 ```sh
 cargo install cargo-fuzz
 cargo +nightly fuzz build
-cargo +nightly fuzz run http fuzz/seeds/http
-cargo +nightly fuzz run path fuzz/seeds/path
-cargo +nightly fuzz run multipart fuzz/seeds/multipart
+mkdir -p fuzz/corpus/http fuzz/corpus/path fuzz/corpus/multipart
+cp fuzz/seeds/http/* fuzz/corpus/http/
+cp fuzz/seeds/path/* fuzz/corpus/path/
+cp fuzz/seeds/multipart/* fuzz/corpus/multipart/
+cargo +nightly fuzz run http fuzz/corpus/http
+cargo +nightly fuzz run path fuzz/corpus/path
+cargo +nightly fuzz run multipart fuzz/corpus/multipart
 ```
 
-Seeds are in `fuzz/seeds/`; generated corpus and artifacts go to
-`fuzz/corpus/` and `fuzz/artifacts/` and are gitignored.
+Seeds are in `fuzz/seeds/`; copy them into the gitignored `fuzz/corpus/`
+before fuzzing so the committed seeds stay pristine.
 
 ## CI
 
