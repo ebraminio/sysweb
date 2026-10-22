@@ -83,7 +83,7 @@ page. There is no bundle, no build step, and no asset directory to lose.
 | Heap, buffers, arrays, callbacks | Fixed buffers, no allocator, blocking loop |
 | Multipart upload parser | Raw `PUT` primary; bounded `multipart/form-data` `POST` for classic forms |
 | Directory HTML built from arrays | 64 KiB fixed HTML buffer, streamed escaping/encoding |
-| `fs.readdir`, `fs.stat` | `getdents64`/`getdirentries64`, `statx`/`fstatat` |
+| `fs.readdir`, `fs.stat` | `getdents64`/`readdir`, `statx`/`fstatat` |
 | Follows links unless checked | All symlinks beneath the root denied |
 | HTTPS in-process | TLS out of scope; put a reverse proxy in front |
 | `--cmd` command execution | Never implemented; remote code execution is not a feature |

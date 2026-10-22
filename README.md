@@ -9,15 +9,16 @@ browser/terminal uploads — reimplemented as a static Rust binary with no
 runtime, no heap, and, on Linux, no libc at all.
 
 - `#![no_std]` — `core` only, no `std`;
-- no heap — no `alloc`, no global allocator, all buffers are fixed-size;
+- no heap in our code — no `alloc`, no global allocator, all buffers are
+  fixed-size; macOS directory iteration may allocate inside libSystem;
 - no third-party crates — `cargo tree` shows exactly one node;
 - on Linux — **no libc at all**: a static ELF, hand-written `_start`, raw
   syscalls, no dynamic section;
-- on macOS — **raw BSD syscalls** and **zero imported symbols**. ld64 requires
-  a `libSystem` load command for any dynamic executable, so it is linked, but
-  the program never calls into it;
-- `unsafe` is confined to the syscall ABI, the entry points, and the few `mem*`
-  shims;
+- on macOS — the **stable libSystem ABI**, not private syscall numbers or
+  kernel `struct stat` layouts. The binary imports only an allowlisted set of
+  libSystem functions; there is no CRT or `std`;
+- `unsafe` is confined to the syscall/FFI ABI, the entry points, and the few
+  `mem*` shims;
 - **binary size is a first-class design goal** — release budgets are checked in
   CI, not just measured after the fact.
 
@@ -59,14 +60,15 @@ feature map, and what is deliberately not carried forward (notably `--cmd`).
 | --- | --- | --- | --- |
 | Linux x86_64 | ✅ cross-built locally; CI job | raw syscalls, static ELF | **none** |
 | Linux aarch64 | ✅ cross-built + checked locally; CI check | raw syscalls, static ELF | **none** |
-| macOS arm64 | ✅ tested locally; CI job | raw BSD syscalls | no libc *calls*; `libSystem` load command only |
+| macOS arm64 | ✅ tested locally; CI job | libSystem ABI | libSystem imports only; no CRT/std |
 | macOS x86_64 | ❌ not yet | — | — |
 | Windows x86_64 | 🗺️ roadmap | Win32 / IOCP | CRT-free planned |
 
-Linux is the primary target for the libc-free goal. macOS uses Apple's
-undocumented raw syscall ABI; Apple does not promise stability across releases.
-The `libSystem` load command is mandatory for ld64, but `nm -u` on the release
-binary is empty.
+Linux is the primary target for the libc-free goal. macOS uses the public
+libSystem ABI: Apple does not promise stability for raw syscall numbers or
+kernel `struct stat` layouts, and ld64 requires `libSystem` anyway. The release
+binary imports only the functions in the allowlist checked by
+`scripts/check-binary.sh`.
 
 Windows is planned as the CRT-free IOCP backend **after** the async reactor, so
 the `Platform`/`Reactor` shape is settled first. A no-CRT entry-point/link spike
@@ -80,8 +82,8 @@ exist, the newest one wins:
 - **Linux 5.6+**: `openat2` with `RESOLVE_NO_SYMLINKS` for every open/create,
   `statx` for metadata, `getdents64` for directory reads. The async milestone
   targets **io_uring**, not epoll.
-- **macOS 11+**: `getdirentries64`, `fstatat`, and `O_NOFOLLOW_ANY`; the async
-  milestone targets `kqueue`.
+- **macOS 11+**: libSystem `fstatat`, `O_NOFOLLOW_ANY`, and
+  `fdopendir`/`readdir`; the async milestone targets `kqueue`.
 - **Windows 10 1809+**: IOCP with `GetQueuedCompletionStatusEx` and
   `CreateFile2`; no `WSAPoll` fallback and no CRT.
 - File serving uses `sendfile` (Linux 40/71, macOS 337); there is no
@@ -212,14 +214,19 @@ On macOS, after `cargo build --release`:
 
 ```console
 $ ls -l target/release/syswebd
--rwxr-xr-x  83024  target/release/syswebd
+-rwxr-xr-x  100592  target/release/syswebd
 
 $ otool -L target/release/syswebd
 target/release/syswebd:
 	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, ...)
 
 $ nm -u target/release/syswebd
-# empty
+___error
+__exit
+_accept
+_bind
+_close
+... (allowlisted libSystem imports)
 ```
 
 The Linux binary is a static ELF with no interpreter and no undefined symbols:
@@ -240,7 +247,7 @@ Current stripped sizes from this workspace:
 
 | Target | Size | Budget |
 | --- | ---: | ---: |
-| macOS arm64 | 83,024 B | 96 KiB |
+| macOS arm64 | 100,592 B | 112 KiB |
 | Linux x86_64 | 57,128 B | 64 KiB |
 | Linux aarch64 | 55,312 B | 64 KiB |
 
@@ -259,7 +266,7 @@ The same checks are available locally and are used by CI:
 ```
 
 `check-binary.sh` verifies the static/EXEC/no-interpreter/no-`NEEDED` shape on
-Linux and the single-`libSystem`/no-undefined-symbols shape on macOS.
+Linux and the single-`libSystem`/allowlisted-imports shape on macOS.
 `check-size.sh` enforces the per-platform budget above in CI and in the release
 workflow. Binary size is treated as a design constraint: new features must fit
 the budget or the budget must be changed deliberately.
@@ -289,7 +296,7 @@ Supported release targets:
 | --- | --- | --- |
 | `linux-x86_64` | `ubuntu-latest` | static ELF |
 | `linux-aarch64` | `ubuntu-24.04-arm` | static ELF |
-| `macos-arm64` | `macos-latest` | Mach-O, `libSystem` load command only |
+| `macos-arm64` | `macos-latest` | Mach-O, allowlisted libSystem ABI imports |
 
 Windows and Intel macOS are not released yet because those backends are not
 implemented. Each archive contains `syswebd`, `README.md`, and `LICENSE`.
@@ -321,20 +328,21 @@ Platform trait     OS seam; Listener/Stream/File/Dir associated types
       │
 unix               RAII descriptors, directory iteration, shared logic
       │
-linux.rs / darwin.rs                       raw syscall ABI
+linux.rs                           raw syscall ABI
+darwin.rs                          libSystem ABI
 ```
 
 - The `Platform` trait is generic, not `dyn`; the server is monomorphized for
   the current OS. All OS handles own their descriptor and close on `Drop`.
 - The HTTP, path, MIME, config, and listing modules are safe Rust. Only the
-  syscall ABI modules and the binary entry points use `unsafe`.
+  syscall/FFI ABI modules and the binary entry points use `unsafe`.
 - No request data is allocated. Directory pages are built with a
   `FixedBuf<65536>` and truncated cleanly if a directory is huge.
 - Names are HTML-escaped and URL-encoded; user-controlled bytes never enter
   response headers unencoded. Symlink entries are not rendered as links.
 
-Read [ARCHITECTURE.md](ARCHITECTURE.md) for syscall tables, stat layouts,
-linker setup, and the async design.
+Read [ARCHITECTURE.md](ARCHITECTURE.md) for ABI/import details, linker setup,
+and the async design.
 
 ## Limits
 

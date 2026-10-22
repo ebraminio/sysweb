@@ -176,13 +176,17 @@ Request logging uses the normalized URL path, which excludes control bytes.
 The root path supplied on the command line is logged verbatim; do not pass a
 root containing terminal escape sequences.
 
-### macOS raw syscall ABI
+### macOS libSystem ABI
 
-The macOS backend uses Apple's undocumented syscall numbers and struct layouts.
-They can change across OS releases. A wrong layout could read the wrong file
-size or mode; it is not a memory-safety issue in the current code because the
-stat buffer is fixed-size and fields are read with bounds, but it can cause
-incorrect responses. Linux is the primary supported target.
+The macOS backend calls the public libSystem ABI rather than private XNU
+syscall numbers or kernel `struct stat` layouts. The release binary links
+`libSystem` (which ld64 requires anyway) and imports only an allowlist of
+functions checked by `scripts/check-binary.sh`. There is no CRT or `std`.
+
+`fdopendir`/`readdir` may allocate inside libSystem; the binary itself has no
+allocator. Linux remains the libc-free target. A wrong SDK `struct stat` layout
+would still produce incorrect responses, but the public libSystem ABI is the
+stable interface Apple supports.
 
 ### No privilege dropping
 

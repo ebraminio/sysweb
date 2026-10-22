@@ -18,9 +18,8 @@ The current release (milestone 0.5).
 - [x] Linux x86_64 and aarch64 raw syscall backends
       (x86_64 runtime-tested; aarch64 cross-built and checked).
 - [x] Linux binary: static ELF, custom `_start`, no libc, no dynamic section.
-- [x] macOS arm64 raw BSD syscall backend.
-- [x] macOS binary: zero imported symbols; `libSystem` only as an ld64
-      requirement.
+- [x] macOS arm64 libSystem ABI backend (stable public functions).
+- [x] macOS binary: no CRT/std; only allowlisted libSystem imports.
 - [x] HTTP/1.0 and HTTP/1.1 request parsing for `GET`/`HEAD`/`PUT`.
 - [x] `Content-Length` and `Expect: 100-continue`; chunked bodies rejected.
 - [x] Static files, `index.html`, MIME table, `sendfile`, single-range 206/416.
@@ -52,16 +51,16 @@ The current release (milestone 0.5).
       with tarballs and SHA-256 checksums.
 - [x] Transient `accept` failures retry with a 100 ms backoff instead of
       exiting; a stalled service is acceptable, a permanent exit is not.
-- [x] Enforced binary-size budgets: 96 KiB macOS arm64, 64 KiB per Linux
+- [x] Enforced binary-size budgets: 112 KiB macOS arm64, 64 KiB per Linux
       target.
 - [x] `cargo-fuzz` targets for HTTP/path/multipart plus a black-box
       containment/hang/crash test in `tests/security.rs`.
 - [x] Default-port fallback when the port is implicit and 8080 is busy.
 - [x] Runtime-tested on a Raspberry Pi 5 (kernel 6.12 aarch64): listings,
       uploads, forms, `sendfile`, symlink denial, aborted transfers.
-- [x] Demonstrated: 83,024-byte macOS binary with `nm -u` empty; 57,128-byte
-      (x86_64) and 55,312-byte (aarch64) static Linux ELFs with no dynamic
-      section.
+- [x] Demonstrated: 100,592-byte macOS binary with only allowlisted libSystem
+      imports; 57,128-byte (x86_64) and 55,312-byte (aarch64) static Linux ELFs
+      with no dynamic section.
 
 **Known gaps:** single-threaded blocking, no timeouts, no keep-alive, no `Date`,
 no multi-range/`If-Range`, no auth/delete/rename, classic forms accept one file,
@@ -107,7 +106,7 @@ Make the blocking server pleasant and safe enough to run on a LAN.
 - [ ] Read/write timeouts (`SO_RCVTIMEO` / `SO_SNDTIMEO`) before the async
       reactor lands.
 - [ ] Graceful shutdown on `SIGINT`/`SIGTERM` (signal syscalls; no libc).
-- [ ] `EMFILE` backoff instead of terminating the process.
+- [x] `EMFILE` backoff instead of terminating the process.
 - [ ] Configurable maximum request-header size and connection limit.
 - [ ] Never log raw control bytes; keep the current normalized-path logging.
 - [ ] Property test: no input to `normalize` can produce a `..` segment.
@@ -115,8 +114,8 @@ Make the blocking server pleasant and safe enough to run on a LAN.
 
 ### Verification
 
-- [ ] `strace`/`dtruss` audit: the only syscalls are the expected ones, and no
-      libc symbol is called on Linux/macOS.
+- [ ] `strace`/`dtruss` audit: Linux makes only the expected syscalls and calls
+      no libc symbol; macOS imports only the allowlisted libSystem functions.
 - [ ] Compare behavior against a reference server for the supported subset.
 - [ ] Add a benchmark script and record baseline throughput/latency.
 
@@ -260,14 +259,14 @@ Every milestone must preserve:
 5. **Measurable claims.** Every “no libc”/“CRT-free” claim comes with a command
    (`nm -u`, `readelf -d`, `otool -L`, `dumpbin /dependents`) and CI output.
 6. **Small binaries.** Release binaries stay within the checked budgets
-   (96 KiB macOS arm64, 64 KiB per Linux target); growth is a deliberate
+   (112 KiB macOS arm64, 64 KiB per Linux target); growth is a deliberate
    decision, not a silent regression.
 
 ## Open questions
 
-- Should the macOS backend keep raw syscalls, or offer a `libsystem` feature for
-  stability? Raw is the experiment; a feature-gated fallback may be wise before
-  publishing.
+- Should macOS directory enumeration move from `readdir` to
+  `getattrlistbulk` to avoid libSystem-internal allocation while keeping the
+  public ABI?
 - How much of io_uring should be used directly (`IORING_OP_*`) versus keeping
   the portable readiness layer for macOS/Windows parity?
 - Does `splice` or io_uring `SEND_ZC` measurably beat `sendfile` for files that

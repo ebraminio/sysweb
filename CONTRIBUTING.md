@@ -38,14 +38,14 @@ If you touched Linux linking, also verify:
 ```sh
 readelf -h target/release/syswebd   # Type: EXEC
 readelf -d target/release/syswebd   # no NEEDED
-nm -u target/release/syswebd        # empty
+nm -u target/release/syswebd        # empty (no libc)
 ```
 
 On macOS:
 
 ```sh
 otool -L target/release/syswebd     # libSystem only (ld64 requirement)
-nm -u target/release/syswebd        # empty
+nm -u target/release/syswebd        # allowlisted libSystem imports only
 ```
 
 ## Style

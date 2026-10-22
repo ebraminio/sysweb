@@ -33,9 +33,10 @@ implemented:
 | Linux async | `io_uring` (not epoll) | Linux 5.1+ (milestone 2) |
 | Linux zero-copy | `sendfile` | Linux 2.6 |
 | macOS open/containment | `O_NOFOLLOW_ANY` | macOS 11 |
-| macOS directories | `getdirentries64` | 64-bit-inode macOS |
-| macOS metadata | `fstatat` | 64-bit-inode macOS |
+| macOS directories | `fdopendir`/`readdir` | public libSystem |
+| macOS metadata | `fstatat` + SDK `struct stat` | 64-bit-inode macOS |
 | macOS async | `kqueue`/`kevent` | macOS 10.5+ |
+| macOS ABI | libSystem functions | macOS 11+ |
 | Windows async | IOCP + `GetQueuedCompletionStatusEx` | Windows 10 1809+ |
 | Windows files | `CreateFile2` | Windows 8+ |
 
@@ -66,7 +67,7 @@ table, the project does not target it.
 │   RAII Listener/Stream/File/Dir; shared Unix logic           │
 ├──────────────────────────────────────────────────────────────┤
 │ src/platform/unix/linux.rs  src/platform/unix/darwin.rs      │
-│   raw syscall numbers, registers, struct layouts             │
+│   Linux raw syscalls; macOS libSystem functions              │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -136,7 +137,7 @@ Design notes:
   `sleep_ms` (Linux `nanosleep`, macOS `poll(NULL, 0, ms)`) instead of exiting.
   Fatal listener errors still terminate; there is no supervisor yet.
 - **Size budget.** Binary size is a design constraint, not an afterthought.
-  CI and the release workflow enforce 96 KiB on macOS arm64 and 64 KiB on each
+  CI and the release workflow enforce 112 KiB on macOS arm64 and 64 KiB on each
   Linux target via `scripts/check-size.sh`; changing a budget is a deliberate
   change, not a silent regression.
 
@@ -207,13 +208,13 @@ Linux uses `statx` with a 256-byte buffer and `STATX_BASIC_STATS`:
 `fstat(fd)` is `statx(fd, "", AT_EMPTY_PATH, ...)`; `fstat_at` uses the root
 directory fd and relative name, with `AT_SYMLINK_NOFOLLOW` for symlink entries.
 
-macOS keeps the raw `fstatat` ABI. Its kernel `struct stat` is 144 bytes and
-puts `st_mode` at 8 (`u16`), `st_size` at 72 (`i64`), and `st_mtime` at 40
-(`i64`). libSystem translates this to the SDK's different userspace layout; we
-read the raw ABI directly.
+macOS uses libSystem `fstat`/`fstatat` and the SDK's 144-byte 64-bit-inode
+`struct stat`: `st_mode` at 4 (`u16`), `st_size` at 96 (`i64`), and
+`st_mtimespec.tv_sec` at 48 (`i64`). The struct is `#[repr(C)]`; no kernel
+layout is assumed.
 
-Both buffers are `#[repr(C, align(8))]`. `st_mode & 0170000 == 0040000` detects
-a directory. `st_mtime` drives the index's modification column and is formatted
+The Linux stat buffer is `#[repr(C, align(8))]`. `st_mode & 0170000 == 0040000`
+detects a directory. `st_mtime` drives the index's modification column and is formatted
 with a stack-only civil-from-days conversion (UTC; the page upgrades it to local
 time in JS).
 
@@ -264,49 +265,30 @@ _bzero:
 volatile store loop. CI runs `cargo test --release` specifically to exercise
 the LTO binary, not just the debug build.
 
-## macOS backend
+## macOS backend (libSystem ABI)
 
-### Syscall convention
+Apple does not document raw syscall numbers or the kernel `struct stat` layout
+as stable. They are private XNU ABI and can change across OS releases. Since
+ld64 requires `libSystem` for every dynamic executable anyway, the macOS
+backend calls the stable libSystem ABI directly instead of guessing syscall
+numbers:
 
-- number in `x16`, arguments in `x0..x5`, `svc #0x80`;
-- on error the kernel sets the carry flag and returns the errno in `x0`;
-- the wrapper emits `cset` immediately after `svc` and maps errno.
+- `openat`, `fstat`, `fstatat`, `unlinkat`, `mkdirat`;
+- `socket`, `bind`, `listen`, `accept`, `setsockopt`;
+- `read`, `write`, `send`, `sendfile`, `close`, `poll`;
+- `fdopendir`, `readdir`, `closedir`;
+- `__error` for errno and `_exit` for termination.
 
-Numbers used (Apple Silicon): `read` 3, `write` 4, `close` 6, `fstat` 189,
-`socket` 97, `accept` 30, `sendto` 133, `bind` 104, `listen` 106,
-`setsockopt` 105, `getdirentries64` 344, `sendfile` 337, `openat` 463,
-`fstatat` 469, `unlinkat` 472, `mkdirat` 475, `exit` 1.
+`build.rs` adds `-lSystem`; the binary still has no CRT, no `std`, no
+allocator, and no third-party crates. The tradeoff is explicit: `nm -u` now
+lists a small allowlisted set of libSystem functions, checked by
+`scripts/check-binary.sh`. Directory iteration uses `fdopendir`/`readdir`,
+which may allocate inside libSystem; the binary itself never links an
+allocator.
 
 `AT_FDCWD` is `-2`, `sockaddr_in` begins with a length byte, `SOL_SOCKET` is
-`0xffff`, `SO_REUSEADDR` is `4`, and `MSG_NOSIGNAL` is `0x80000`. Directory
-records come from `getdirentries64`; the 64-bit `struct dirent` has `d_reclen`
-at 16, `d_namlen` at 18, `d_type` at 20, and the name at 21.
-
-### Kernel `struct stat` vs. userspace `struct stat`
-
-The raw `fstat` syscall fills the kernel's legacy layout, **not** the 144-byte
-SDK `struct stat` that libSystem hands to C programs. The raw layout starts
-with `st_dev` (u32), `st_ino` (u32), `st_mode` (u16 at offset 8), and puts
-`st_size` at offset 72. The SDK layout has `st_mode` at 4 and `st_size` at 96.
-`sysweb` reads the raw layout directly and documents it in `darwin.rs`. This is
-one reason macOS support is explicit rather than pretending the ABI is stable.
-
-### Why libSystem is still listed
-
-ld64 refuses to link a dynamic executable without a `libSystem` load command:
-
-```
-ld: dynamic executables or dylibs must link with libSystem.dylib
-```
-
-`build.rs` therefore adds `-lSystem` for the macOS binary. It is a load command,
-not a dependency in practice: the final binary has **no undefined symbols**, so
-there is nothing to bind from libSystem. `otool -L` shows it; `nm -u` is empty.
-Direct syscalls are used for every operation.
-
-Apple's syscall numbers and layouts can change between OS releases. Linux is the
-supported libc-free target; macOS is a best-effort experiment. Intel macOS is
-not implemented yet.
+`0xffff`, and `SO_REUSEADDR` is `4`. `O_NOFOLLOW_ANY` is available from macOS
+11. Intel macOS is not implemented yet.
 
 ## HTTP pipeline
 
@@ -443,13 +425,17 @@ There is no `alloc` crate dependency and no `#[global_allocator]`. If a future
 change introduces an allocation, the crate stops compiling for a no-std target,
 which is the desired failure mode.
 
+On macOS, `fdopendir`/`readdir` may allocate inside libSystem; that allocator
+is not linked into `syswebd`, and it is the only known hidden allocation on the
+macOS path.
+
 ## Safety invariants
 
 - `argv` is read only for `argc` entries, capped at 32, with each string capped
   at 4096 bytes. The kernel/dyld guarantees NUL termination and validity.
 - Syscall buffers are local, initialized (or written by the kernel before being
   read), and bounds-checked before the call.
-- `statx` uses a 256-byte buffer; the macOS `fstatat` buffer is 144 bytes.
+- `statx` uses a 256-byte buffer; the macOS SDK `struct stat` is 144 bytes.
   Both exceed their ABI struct sizes.
 - Directory records are bounds-checked (`reclen`, `namlen`, name range) before
   any field is read; names are copied into a 256-byte caller buffer.
@@ -473,8 +459,8 @@ which is the desired failure mode.
   controls, NUL, `.` and `..`; the parser never allocates or buffers a whole
   body.
 
-Known unsafe edges: the raw syscall ABI itself, the `argv` dereference, the
-`mem*` shims, and Apple's undocumented syscall ABI. All are isolated and
+Known unsafe edges: the raw syscall/libSystem FFI declarations, the `argv`
+dereference, and the `mem*` shims. All are isolated and
 reviewable.
 
 ## Async design (milestone 1)
@@ -583,8 +569,8 @@ several.
 
 ## Porting checklist
 
-1. Add `src/platform/<os>.rs` with the raw ABI (syscall/API numbers, structs,
-   error mapping).
+1. Add `src/platform/<os>.rs` with the chosen ABI (raw syscalls or public
+   library functions, structs, error mapping).
 2. Add safe RAII handle types and `impl Platform`.
 3. Add the binary entry point and `mem*` shims to `src/bin/syswebd.rs`.
 4. Add link arguments to `build.rs`.
@@ -616,8 +602,10 @@ several.
 
 ## Known risks
 
-- **macOS raw ABI**: syscall numbers and the kernel stat layout are not a
-  supported public ABI. A future macOS release can break them.
+- **macOS libSystem allocation**: `fdopendir`/`readdir` may allocate inside
+  libSystem even though the binary has no allocator. Moving to
+  `getattrlistbulk` would remove that allocation without returning to private
+  syscall numbers.
 - **Single-threaded blocking**: no timeouts yet; a slow client can pin the
   server. This is the main reason async is milestone 1.
 - **Symlinks**: all links beneath the root are refused. The root's own path
