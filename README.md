@@ -62,7 +62,7 @@ feature map, and what is deliberately not carried forward (notably `--cmd`).
 | Linux aarch64 | ✅ cross-built + checked locally; CI check | raw syscalls, static ELF | **none** |
 | macOS arm64 | ✅ tested locally; CI job | libSystem ABI | libSystem imports only; no CRT/std |
 | macOS x86_64 | ❌ not yet | — | — |
-| Windows x86_64 | 🗺️ roadmap | Win32 / IOCP | CRT-free planned |
+| Windows x86_64 | 🧪 no-CRT link spike validated; backend roadmap | Win32 / IOCP | CRT-free |
 
 Linux is the primary target for the libc-free goal. macOS uses the public
 libSystem ABI: Apple does not promise stability for raw syscall numbers or
@@ -71,8 +71,10 @@ binary imports only the functions in the allowlist checked by
 `scripts/check-binary.sh`.
 
 Windows is planned as the CRT-free IOCP backend **after** the async reactor, so
-the `Platform`/`Reactor` shape is settled first. A no-CRT entry-point/link spike
-can happen earlier, but there will not be a blocking Windows backend.
+the `Platform`/`Reactor` shape is settled first. There will not be a blocking
+Windows backend. A no-CRT entry-point/link spike is already validated:
+[`spikes/windows-no-crt`](spikes/windows-no-crt/) builds a 3,584-byte x86_64 PE
+that imports only `KERNEL32.dll` and ran on Windows 11.
 
 ### Latest-API policy
 
@@ -384,7 +386,7 @@ The next milestone is the async reactor abstraction:
   per-connection buffers, no futures executor;
 - uploads integrated into the state machine; directory listing stays bounded;
 - timeouts, keep-alive, connection limits;
-- Windows CRT-free entry and build recipe;
+- Windows IOCP backend; the no-CRT entry/link spike is already done;
 - conditional requests, multi-range, delete/rename, auth, CORS, prefix;
 - `splice`/io_uring zero-copy paths beyond `sendfile`;
 - multi-file multipart forms and `filename*` support;

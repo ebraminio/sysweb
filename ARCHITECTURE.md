@@ -12,7 +12,7 @@ Goals:
 2. No third-party crates.
 3. Direct OS interfaces, with a portable abstraction above them.
 4. Linux: no libc, static ELF, custom `_start`.
-5. Windows: no CRT (roadmap).
+5. Windows: no-CRT spike validated; IOCP backend on the roadmap.
 6. `unsafe` concentrated in small, reviewable ABI modules.
 7. A blocking implementation that already has the shape of the async one.
 8. Latest OS APIs only. No legacy fallbacks.
@@ -554,6 +554,13 @@ Directory rendering stays a bounded in-memory step (64 KiB), so it does not
 need incremental state.
 
 ## Windows plan (milestone 2)
+
+A no-CRT entry/link spike lives in `spikes/windows-no-crt`: a 3,584-byte x86_64
+PE with a custom `mainCRTStartup`, no CRT, and only `KERNEL32.dll` imports
+(`ExitProcess`, `GetStdHandle`, `WriteFile`). It was run on Windows 11. The
+spike also established that the GNU PE must keep relocations and use a 6.0
+subsystem version on this loader; `-static` and fixed/no-reloc images failed
+with `STATUS_INVALID_IMAGE_FORMAT`.
 
 - `#![no_main]`, export `mainCRTStartup` as the entry point.
 - Link with `/NODEFAULTLIB` and explicit `kernel32.lib` / `ws2_32.lib`; provide

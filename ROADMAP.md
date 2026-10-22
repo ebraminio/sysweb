@@ -176,12 +176,14 @@ executor and no allocation.
 ## M3 — Windows CRT-free backend 🗺️
 
 **Ordering:** after M2. The Windows backend is IOCP, not a blocking
-implementation that would be rewritten by the reactor. A small no-CRT
-link/entry-point spike can be done earlier on the `192.168.1.50` machine, but
-the real backend lands against the async `Reactor` trait.
+implementation that would be rewritten by the reactor. The no-CRT
+link/entry-point spike is done in `spikes/windows-no-crt`; the real backend
+lands against the async `Reactor` trait.
 
-- [ ] `#![no_main]`, export `mainCRTStartup`, `/NODEFAULTLIB`.
-- [ ] Provide `mem*` shims and the panic handler for the MSVC target.
+- [x] No-CRT entry/link spike: `#![no_main]`, `mainCRTStartup`,
+      `/NODEFAULTLIB`, 3,584-byte PE, only `KERNEL32.dll`, runs on Windows 11.
+- [ ] Provide any remaining `mem*` shims for the full MSVC target (the spike
+      needs none).
 - [ ] Link `kernel32`/`ws2_32` explicitly; document the exact MSVC/link.exe
       recipe and the LLVM/lld alternative.
 - [ ] `WSAStartup`, `socket`, `bind`, `listen`, `accept`, `recv`, `send`.
