@@ -48,6 +48,9 @@ jobs:
       - name: Verify no external runtime dependencies
         run: ./scripts/check-binary.sh target/${{ matrix.target }}/release/syswebd
 
+      - name: Verify binary size budget
+        run: ./scripts/check-size.sh target/${{ matrix.target }}/release/syswebd
+
       - name: Package artifact and checksum
         shell: bash
         run: |
