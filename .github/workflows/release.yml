@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: release-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+          # Native arm64 runner; available for public repositories.
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: linux-aarch64
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Tests (release + LTO)
+        run: cargo test --release --target ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Verify no external runtime dependencies
+        run: ./scripts/check-binary.sh target/${{ matrix.target }}/release/syswebd
+
+      - name: Package artifact and checksum
+        shell: bash
+        run: |
+          set -eu
+          short="$(git rev-parse --short=12 HEAD)"
+          stem="sysweb-${short}-${{ matrix.platform }}"
+          mkdir -p "dist/${stem}"
+          cp "target/${{ matrix.target }}/release/syswebd" "dist/${stem}/syswebd"
+          cp README.md LICENSE "dist/${stem}/"
+          tar -C dist -czf "dist/${stem}.tar.gz" "${stem}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "${stem}.tar.gz" > "${stem}.tar.gz.sha256")
+          else
+            (cd dist && shasum -a 256 "${stem}.tar.gz" > "${stem}.tar.gz.sha256")
+          fi
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 3
+
+  release:
+    name: publish per-commit release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*"
+          path: dist
+          merge-multiple: true
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          short="${GITHUB_SHA:0:12}"
+          tag="build-${short}"
+          title="Build ${short}"
+          notes="Automated per-commit build of ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}. Artifacts are static/standalone where the target allows it; see the README for the platform matrix. Each tarball has a .sha256 checksum."
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --notes "$notes" \
+              --latest=false
+          fi
