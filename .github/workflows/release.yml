@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          short="$(git rev-parse --short=12 HEAD)"
+          short="${GITHUB_SHA:0:12}"
           stem="sysweb-${short}-${{ matrix.platform }}"
           mkdir -p "dist/${stem}"
           cp "target/${{ matrix.target }}/release/syswebd" "dist/${stem}/syswebd"
