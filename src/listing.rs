@@ -482,6 +482,7 @@ pub fn render<P: Platform>(
         || !out.push(b" &middot; no_std &middot; no alloc &middot; syscalls")
         || !out.push(b"</footer>\n<details><summary>Terminal transfer</summary><pre>")
         || !out.push(b"# upload (when --upload is enabled)\ncurl -T FILE URL\n\n")
+        || !out.push(b"# Windows PowerShell (multipart POST; needs --upload)\n$f = \"C:\\exe.exe\"\n$w = New-Object System.Net.WebClient\n$w.UploadFile(\"URL\", $f)\n\n")
         || !out.push(b"# download\ncurl -O URL</pre></details>\n<script>")
         || !out.push(JS)
         || !out.push(b"</script>\n</body>\n</html>\n")

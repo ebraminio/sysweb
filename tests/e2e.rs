@@ -605,6 +605,7 @@ fn multipart_forms_work_for_old_browsers() {
     assert!(!page.contains("var(--"));
     assert!(page.contains("webkitdirectory"));
     assert!(page.contains("webkitRelativePath"));
+    assert!(page.contains("System.Net.WebClient"));
 
     // Classic form post to a directory: filename comes from the part.
     let body = multipart_body("----syswebForm", "old.txt", b"hello from a form");
