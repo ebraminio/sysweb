@@ -12,11 +12,29 @@ use crate::platform::{DirEntry, EntryKind, Platform};
 pub const LISTING_BUF: usize = 64 * 1024;
 
 const CSS: &[u8] = br###"
+/* Legacy engines: hard-coded light fallback. The var() rules below override
+   this, and prefers-color-scheme still supplies the modern dark palette. */
+body { margin: 0; background: #f5f6f8; color: #17191d; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+a { color: #0b63b6; }
+header, .tools { display: block; }
+.btn { display: inline-block; border: 1px solid #d9dde4; background: #fff; color: #17191d; padding: .42rem .7rem; }
+.btn.primary { border-color: #0b63b6; color: #0b63b6; }
+.btn input[type=file] { color: #5f6672; }
+.crumb, .sep, #status, .note, th, td.size, td.type, td.modified, tr.empty td, footer, summary, h1 .path, td.name .symlink { color: #5f6672; }
+.brand, .note code, footer a, tr.parent td.name a { color: #0b63b6; }
+table { background: #fff; border: 1px solid #d9dde4; }
+th, td { border-bottom: 1px solid #d9dde4; }
+pre { background: #fff; border: 1px solid #d9dde4; }
+#drop { border: 1px dashed #d9dde4; color: #5f6672; }
+#drop.over { border-color: #0b63b6; background: #eef3f9; color: #0b63b6; }
+.crumb, h1, #status, td.name { word-wrap: break-word; }
+
 :root {
   color-scheme: light dark;
   --bg: #f5f6f8; --fg: #17191d; --mut: #5f6672; --line: #d9dde4;
   --panel: #ffffff; --accent: #0b63b6; --hover: #eef3f9; --danger: #a3261e;
 }
+a { color: var(--accent); }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #101216; --fg: #e7eaf0; --mut: #9aa3b2; --line: #272c35;
