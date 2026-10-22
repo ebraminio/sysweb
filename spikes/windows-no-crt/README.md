@@ -52,9 +52,31 @@ Notes from making it load:
   So `/FIXED` is not a toolchain limitation. The Rust spike keeps the default
   relocation section because it is more robust; fixed-base is optional.
 
-For a single-section MSVC layout, the battery-warn recipe can be extended with
-`/FIXED /DYNAMICBASE:NO /MERGE:.rdata=.text` once the image has no writable
-global state. This spike defaults to a relocatable image; it has no `static`
-items, so the read-only sections are mergeable. The real Windows backend
-remains the IOCP/async backend; this spike only de-risks the entry point, linker
-flags, and import table.
+### Fixed base vs. one section
+
+`/FIXED` alone only fixes the image base; it does not collapse sections. The
+one-section battery-warn result comes from the **LLVM/ld-link** recipe:
+
+```text
+-fuse-ld=lld-link -Wl,/fixed -Wl,/dynamicbase:no
+-Wl,/merge:.rdata=.text -Wl,/merge:.pdata=.text
+```
+
+A C probe linked that way produced a **1,024-byte PE with a single `.text`
+section** and ran on Windows 11. The current battery-warn `build.bat` (MSVC) is
+not one-section. This Rust spike is built with GNU GCC and remains
+multi-section. A future MSVC/lld-link Windows build can apply the same merge
+flags; no writable globals are a prerequisite, because `.data`/`.bss` cannot be
+merged into read-only `.text`.
+
+The real Windows backend remains the IOCP/async backend; this spike only
+de-risks the entry point, linker flags, and import table.
+
+### `-ffreestanding` and `mem*`
+
+`-ffreestanding` is a C/Clang flag, not a Rust one. `#![no_std]` is the
+semantic equivalent here, but it does not stop LLVM from emitting calls to
+`memcpy`/`memset` for idioms. It also does not provide those functions. The
+server already supplies its own `memcpy`, `memmove`, `memset`, `memcmp`,
+`bcmp`, and `bzero` shims in `src/bin/syswebd.rs`; that is the correct layer for
+this. `-ffreestanding` is therefore not the tool for one-section linking.

@@ -569,7 +569,9 @@ PE with a custom `mainCRTStartup`, no CRT, and only `KERNEL32.dll` imports
 spike also established that this loader needs a 6.0 subsystem version; `10.0`
 failed with `STATUS_INVALID_IMAGE_FORMAT`. With 6.0, relocatable, `-static`, and
 fixed/no-reloc images all run, and a remote MSVC `/FIXED /DYNAMICBASE:NO` build
-was verified. The Rust spike keeps relocations for robustness.
+was verified. `/FIXED` only fixes the base; a one-section image additionally
+needs lld-link `/MERGE` (verified with a 1,024-byte C probe). The Rust spike
+keeps relocations for robustness.
 
 - `#![no_main]`, export `mainCRTStartup` as the entry point.
 - Link with `/NODEFAULTLIB` and explicit `kernel32.lib` / `ws2_32.lib`; provide
