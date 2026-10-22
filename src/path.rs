@@ -147,11 +147,10 @@ fn append(out: &mut [u8], len: &mut usize, bytes: &[u8]) -> Result<(), PathError
     Ok(())
 }
 
-/// Join the document root and a normalized URL path into `out`.
-///
-/// A path ending in `/` gets `index.html` appended. The returned length
-/// excludes the trailing NUL, which is written at `out[length]`.
-pub fn join(root: &[u8], path: &[u8], out: &mut [u8]) -> Result<usize, PathError> {
+/// Join the document root and a normalized URL path into `out`, without
+/// appending a directory index. The returned length excludes the trailing
+/// NUL, which is written at `out[length]`.
+pub fn join_dir(root: &[u8], path: &[u8], out: &mut [u8]) -> Result<usize, PathError> {
     if root.is_empty() || path.first() != Some(&b'/') {
         return Err(PathError::Forbidden);
     }
@@ -172,17 +171,50 @@ pub fn join(root: &[u8], path: &[u8], out: &mut [u8]) -> Result<usize, PathError
         append(out, &mut len, path)?;
     }
 
-    if out[len - 1] == b'/' {
-        append(out, &mut len, b"index.html")?;
-    }
-
     out[len] = 0;
     Ok(len)
 }
 
+/// Append `index.html` to a directory path. The returned length excludes the
+/// trailing NUL.
+pub fn append_index(path: &[u8], out: &mut [u8]) -> Result<usize, PathError> {
+    if path.last() != Some(&b'/') || path.contains(&0) {
+        return Err(PathError::Forbidden);
+    }
+    if path.len() + 10 >= out.len() {
+        return Err(PathError::TooLong);
+    }
+    out[..path.len()].copy_from_slice(path);
+    out[path.len()..path.len() + 10].copy_from_slice(b"index.html");
+    out[path.len() + 10] = 0;
+    Ok(path.len() + 10)
+}
+
+fn append_index_in_place(out: &mut [u8], len: usize) -> Result<usize, PathError> {
+    if len + 10 >= out.len() {
+        return Err(PathError::TooLong);
+    }
+    out[len..len + 10].copy_from_slice(b"index.html");
+    out[len + 10] = 0;
+    Ok(len + 10)
+}
+
+/// Join the document root and a normalized URL path into `out`.
+///
+/// A path ending in `/` gets `index.html` appended. The returned length
+/// excludes the trailing NUL, which is written at `out[length]`.
+pub fn join(root: &[u8], path: &[u8], out: &mut [u8]) -> Result<usize, PathError> {
+    let len = join_dir(root, path, out)?;
+    if path.ends_with(b"/") {
+        append_index_in_place(out, len)
+    } else {
+        Ok(len)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{join, normalize, PathError, MAX_PATH, MAX_URL_PATH};
+    use super::{append_index, join, join_dir, normalize, PathError, MAX_PATH, MAX_URL_PATH};
 
     fn norm(target: &[u8]) -> Result<&[u8], PathError> {
         // Test helper leaks through a static scratch buffer; tests run
@@ -274,6 +306,31 @@ mod tests {
 
         let n = join(b".", b"/a", &mut out).unwrap();
         assert_eq!(&out[..n], b"./a");
+    }
+
+    #[test]
+    fn joins_directories_without_an_index() {
+        let mut out = [0u8; MAX_PATH];
+
+        let n = join_dir(b"public", b"/assets/", &mut out).unwrap();
+        assert_eq!(&out[..n], b"public/assets/");
+        assert_eq!(out[n], 0);
+
+        let mut index = [0u8; MAX_PATH];
+        let n = append_index(&out[..n], &mut index).unwrap();
+        assert_eq!(&index[..n], b"public/assets/index.html");
+        assert_eq!(index[n], 0);
+
+        let mut out2 = [0u8; MAX_PATH];
+        let n = join_dir(b"public", b"/assets", &mut out2).unwrap();
+        assert_eq!(&out2[..n], b"public/assets");
+        let n = join(b"public", b"/assets", &mut out2).unwrap();
+        assert_eq!(&out2[..n], b"public/assets");
+
+        assert_eq!(
+            append_index(b"public/assets", &mut out2),
+            Err(PathError::Forbidden)
+        );
     }
 
     #[test]

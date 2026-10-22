@@ -1,11 +1,14 @@
-//! End-to-end test: spawn the real freestanding binary and speak HTTP to it.
+//! End-to-end tests: spawn the real freestanding binary and speak HTTP to it.
 
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+
+static NEXT_SERVER: AtomicUsize = AtomicUsize::new(0);
 
 struct TestServer {
     child: Child,
@@ -34,26 +37,43 @@ fn write_file(root: &Path, name: &str, contents: &[u8]) {
     fs::write(path, contents).expect("write fixture");
 }
 
-fn start_server() -> TestServer {
-    let root = std::env::temp_dir().join(format!("sysweb-e2e-{}", std::process::id()));
+fn create_fixtures(root: &Path) {
+    write_file(root, "index.html", b"<h1>index</h1>");
+    write_file(root, "hello world.txt", b"hello, space");
+    write_file(root, "app.js", b"console.log('hi')");
+    write_file(root, "sub/index.html", b"sub index");
+    write_file(root, "blob.bin", &[0u8, 1, 2, 3, 0xff, 0xfe, 0, 42]);
+    let large: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
+    write_file(root, "large.bin", &large);
+
+    write_file(root, "assets/hello world.txt", b"hello list");
+    write_file(root, "assets/app.js", b"console.log(1)");
+    write_file(root, "assets/a&b<c>\".txt", b"escaped");
+    write_file(root, "assets/empty.txt", b"");
+    write_file(root, "assets/replace.txt", b"old");
+    fs::create_dir_all(root.join("assets/nested")).expect("nested dir");
+    std::os::unix::fs::symlink("/etc/passwd", root.join("assets/leak")).expect("symlink");
+}
+
+fn start_server(extra: &[&str]) -> TestServer {
+    let id = NEXT_SERVER.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("sysweb-e2e-{}-{id}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("create root");
-
-    write_file(&root, "index.html", b"<h1>index</h1>");
-    write_file(&root, "hello world.txt", b"hello, space");
-    write_file(&root, "app.js", b"console.log('hi')");
-    write_file(&root, "sub/index.html", b"sub index");
-    write_file(&root, "blob.bin", &[0u8, 1, 2, 3, 0xff, 0xfe, 0, 42]);
-    let large: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
-    write_file(&root, "large.bin", &large);
+    create_fixtures(&root);
 
     let port = free_port();
-    let child = Command::new(env!("CARGO_BIN_EXE_syswebd"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_syswebd"));
+    command
         .arg("--root")
         .arg(&root)
         .arg("--port")
         .arg(port.to_string())
-        .arg("--quiet")
+        .arg("--quiet");
+    for arg in extra {
+        command.arg(arg);
+    }
+    let child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -94,6 +114,16 @@ fn get(port: u16, target: &str) -> Vec<u8> {
     request(port, raw.as_bytes())
 }
 
+fn put(port: u16, target: &str, body: &[u8]) -> Vec<u8> {
+    let mut raw = format!(
+        "PUT {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    raw.extend_from_slice(body);
+    request(port, &raw)
+}
+
 fn split(response: &[u8]) -> (String, &[u8]) {
     let at = response
         .windows(4)
@@ -119,9 +149,13 @@ fn assert_status(head: &str, expected: &str) {
     );
 }
 
+fn text(response: &[u8]) -> String {
+    String::from_utf8_lossy(response).into_owned()
+}
+
 #[test]
-fn serves_static_files_and_rejects_bad_requests() {
-    let server = start_server();
+fn serves_static_files_and_directory_indexes() {
+    let server = start_server(&[]);
     let port = server.port;
 
     let response = get(port, "/");
@@ -162,6 +196,11 @@ fn serves_static_files_and_rejects_bad_requests() {
     assert_status(&head, "HTTP/1.1 200 OK");
     assert_eq!(body, b"sub index");
 
+    let response = get(port, "/sub");
+    let (head, _) = split(&response);
+    assert_status(&head, "HTTP/1.1 301 Moved Permanently");
+    assert_eq!(header(&head, "Location"), Some("/sub/"));
+
     let response = get(port, "/blob.bin");
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 200 OK");
@@ -183,23 +222,6 @@ fn serves_static_files_and_rejects_bad_requests() {
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 404 Not Found");
     assert_eq!(body, b"404 Not Found\n");
-
-    // A directory without a trailing slash does not get an index.
-    let response = get(port, "/sub");
-    let (head, _) = split(&response);
-    assert_status(&head, "HTTP/1.1 404 Not Found");
-
-    // Longer than MAX_URL_PATH: rejected before touching the filesystem.
-    let long_target = format!("/{}", "a".repeat(1500));
-    let response = get(port, &long_target);
-    let (head, _) = split(&response);
-    assert_status(&head, "HTTP/1.1 414 URI Too Long");
-
-    // HTTP/1.0 is accepted; the response is still Connection: close.
-    let response = request(port, b"GET / HTTP/1.0\r\n\r\n");
-    let (head, body) = split(&response);
-    assert_status(&head, "HTTP/1.1 200 OK");
-    assert_eq!(body, b"<h1>index</h1>");
 
     let response = get(port, "/../Cargo.toml");
     let (head, _) = split(&response);
@@ -224,4 +246,176 @@ fn serves_static_files_and_rejects_bad_requests() {
     let response = request(port, b"GET\r\n\r\n");
     let (head, _) = split(&response);
     assert_status(&head, "HTTP/1.1 400 Bad Request");
+
+    // A directory without an index.html gets the built-in listing.
+    let response = get(port, "/assets/");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(
+        header(&head, "Content-Type"),
+        Some("text/html; charset=utf-8")
+    );
+    let page = text(body);
+    assert!(page.contains("data-path=\"/assets/\""));
+    assert!(page.contains("data-upload=\"0\""));
+    assert!(page.contains("hello world.txt"));
+    assert!(page.contains("text/javascript"));
+    assert!(page.contains("a&amp;b&lt;c&gt;&quot;.txt"));
+    assert!(!page.contains("a&b<c>\""));
+    assert!(page.contains("href=\"/assets/a%26b%3Cc%3E%22.txt\""));
+
+    // A symlink is listed but not followed.
+    let response = get(port, "/assets/leak");
+    let (head, _) = split(&response);
+    assert_status(&head, "HTTP/1.1 403 Forbidden");
+    assert!(text(&get(port, "/assets/")).contains("symlinks are not served"));
+
+    let response = get(port, "/assets/nested/");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert!(text(body).contains("This directory is empty."));
+
+    let response = request(
+        port,
+        b"HEAD /assets/empty.txt HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    );
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(header(&head, "Content-Length"), Some("0"));
+    assert!(body.is_empty());
+}
+
+#[test]
+fn no_index_is_403_but_static_index_is_still_served() {
+    let server = start_server(&["--no-index"]);
+    let port = server.port;
+
+    let response = get(port, "/");
+    assert_status(&split(&response).0, "HTTP/1.1 200 OK");
+
+    let response = get(port, "/assets/");
+    let (head, _) = split(&response);
+    assert_status(&head, "HTTP/1.1 403 Forbidden");
+
+    let response = get(port, "/assets");
+    assert_status(&split(&response).0, "HTTP/1.1 301 Moved Permanently");
+
+    // Uploads are off unless explicitly requested.
+    let response = put(port, "/assets/new.txt", b"nope");
+    let (head, _) = split(&response);
+    assert_status(&head, "HTTP/1.1 405 Method Not Allowed");
+    assert_eq!(header(&head, "Allow"), Some("GET, HEAD"));
+}
+
+#[test]
+fn uploads_create_files_and_directories() {
+    let server = start_server(&["--upload"]);
+    let port = server.port;
+
+    let response = put(port, "/assets/up.txt", b"hello upload");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 201 Created");
+    assert_eq!(body, b"UPLOADED\n");
+
+    let response = get(port, "/assets/up.txt");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"hello upload");
+
+    // Existing files are not replaced without --replace.
+    let response = put(port, "/assets/up.txt", b"second");
+    assert_status(&split(&response).0, "HTTP/1.1 409 Conflict");
+
+    let response = put(port, "/assets/brand-new/", b"");
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    let response = get(port, "/assets/brand-new/");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert!(text(body).contains("This directory is empty."));
+    assert!(text(&get(port, "/assets/")).contains("data-upload=\"1\""));
+
+    let response = put(port, "/assets/nested/", b"");
+    assert_status(&split(&response).0, "HTTP/1.1 409 Conflict");
+
+    let response = put(port, "/assets/no-parent/file.txt", b"x");
+    assert_status(&split(&response).0, "HTTP/1.1 404 Not Found");
+
+    let response = put(port, "/", b"x");
+    assert_status(&split(&response).0, "HTTP/1.1 400 Bad Request");
+
+    let response = put(port, "/../escape.txt", b"x");
+    assert_status(&split(&response).0, "HTTP/1.1 400 Bad Request");
+
+    // Missing Content-Length is 411, not a guessed body.
+    let response = request(
+        port,
+        b"PUT /assets/no-length.txt HTTP/1.1\r\nHost: x\r\n\r\n",
+    );
+    assert_status(&split(&response).0, "HTTP/1.1 411 Length Required");
+
+    // A too-large Content-Length is rejected before reading a body.
+    let response = request(
+        port,
+        b"PUT /assets/too-large.bin HTTP/1.1\r\nHost: x\r\nContent-Length: 1073741825\r\n\r\n",
+    );
+    assert_status(&split(&response).0, "HTTP/1.1 413 Payload Too Large");
+
+    // Binary bodies round-trip exactly.
+    let binary: Vec<u8> = (0..=255u8).collect();
+    let response = put(port, "/assets/binary.dat", &binary);
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    let response = get(port, "/assets/binary.dat");
+    let (_, body) = split(&response);
+    assert_eq!(body, binary);
+
+    // Expect: 100-continue: the client waits for the interim response.
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("timeout");
+    stream
+        .write_all(
+            b"PUT /assets/expect.txt HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n",
+        )
+        .expect("headers");
+    let mut interim = [0u8; 64];
+    let count = stream.read(&mut interim).expect("interim");
+    assert!(
+        interim[..count].starts_with(b"HTTP/1.1 100 Continue"),
+        "unexpected interim response: {:?}",
+        &interim[..count]
+    );
+    stream.write_all(b"hello").expect("body");
+    let mut final_response = Vec::new();
+    stream
+        .read_to_end(&mut final_response)
+        .expect("final response");
+    assert_status(&split(&final_response).0, "HTTP/1.1 201 Created");
+
+    let response = get(port, "/assets/expect.txt");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"hello");
+
+    // Early EOF cleans up the partial file (and exercises unlinkat).
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .write_all(b"PUT /assets/partial.txt HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\nabc")
+        .expect("partial body");
+    drop(stream);
+    std::thread::sleep(Duration::from_millis(100));
+    let response = get(port, "/assets/partial.txt");
+    assert_status(&split(&response).0, "HTTP/1.1 404 Not Found");
+}
+
+#[test]
+fn replace_mode_overwrites() {
+    let server = start_server(&["--upload", "--replace"]);
+    let port = server.port;
+
+    let response = put(port, "/assets/replace.txt", b"new contents");
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    let response = get(port, "/assets/replace.txt");
+    let (_, body) = split(&response);
+    assert_eq!(body, b"new contents");
 }

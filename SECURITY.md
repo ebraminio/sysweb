@@ -1,8 +1,8 @@
 # Security policy
 
-`sysweb` is a **static file server in an early milestone**. It is suitable for
-local development and trusted LANs. It is **not** hardened for direct exposure
-to the public internet.
+`sysweb` is a **file-transfer server in an early milestone**. It is suitable
+for local development, trusted LANs, and moving files between machines you
+control. It is **not** hardened for direct exposure to the public internet.
 
 ## Supported versions
 
@@ -33,6 +33,8 @@ In scope:
 - requests that are larger than the fixed buffers;
 - malformed request lines and methods;
 - client disconnects and partial writes;
+- malicious uploads, stored XSS, disk exhaustion;
+- cross-site requests against a loopback-bound server;
 - resource exhaustion through slow or many connections.
 
 Out of scope for 0.1:
@@ -59,14 +61,26 @@ Out of scope for 0.1:
   `path::join` rejects any residual `..` segment.
 - **Fixed buffers.** Oversized headers are 431; oversized URLs are 414. There
   are no dynamic allocations to exhaust.
-- **No header reflection.** Response headers contain only static strings and
-  decimal numbers; the request target is not echoed into headers.
+- **No raw header reflection.** Response headers contain static strings,
+  decimal numbers, and a percent-encoded `Location` path; raw request bytes are
+  never echoed.
 - **Bounded reads/writes.** The parser stops at `\r\n\r\n` or 8 KiB; file
-  streaming stops at `Content-Length`.
+  streaming and uploads stop at `Content-Length`.
 - **`MSG_NOSIGNAL`.** A client disconnect during a write does not kill the
   process with `SIGPIPE` on Linux or macOS.
-- **Read-only files.** Files are opened `O_RDONLY`. There is no upload, write,
-  delete, or CGI path.
+- **Read-only by default.** Files are opened `O_RDONLY`; uploads and folder
+  creation require `--upload`, and overwriting requires `--replace`.
+- **No symlink following on the final component.** `O_NOFOLLOW` is used for
+  file opens, directory opens, and upload creation. Symlinks are rendered as
+  unlinked `link` rows in the index.
+- **Bounded uploads.** `Content-Length` is mandatory for file uploads, chunked
+  bodies are rejected, and bodies above 1 GiB are 413 before reading.
+- **Failed uploads are unlinked.** A partial file is removed after early EOF or
+  a write error, so it is not served later.
+- **Index output is escaped.** Names are HTML-escaped in text/attributes and
+  percent-encoded in URLs; a filename cannot inject markup or a
+  `javascript:` href.
+- **No CGI/`--cmd`.** There is no command execution endpoint, by design.
 
 ## Known limitations
 
@@ -83,17 +97,55 @@ Do not expose the server to untrusted networks until the async reactor and
 timeouts land (milestone 1/2). A reverse proxy with timeouts can mitigate this
 in the meantime.
 
-### Symlinks are followed
+### Symlinks in intermediate directories
 
-`openat` follows symlinks. A symlink inside the document root can point to a
-file outside it. Only serve a directory tree you control and do not create
-links to sensitive files. Planned fix: `openat2(RESOLVE_BENEATH)` on Linux and
-`O_NOFOLLOW`/`lstat` walks elsewhere.
+Final-component symlinks are refused, but a symlinked directory in the middle
+of a path can still escape the document root. Only serve a tree you control and
+do not place symlinked directories inside it. Planned fix:
+`openat2(RESOLVE_BENEATH)` on Linux and component-by-component `O_NOFOLLOW`
+walks elsewhere.
+
+### Uploads are unauthenticated
+
+With `--upload`, anyone who can reach the port can write files, create
+directories, and (with `--replace`) overwrite them. There is no authentication,
+quota, or per-client limit. Keep the loopback default, or put an authenticated
+reverse proxy in front.
+
+Uploaded HTML/SVG can be served back with an active content type. If you enable
+uploads on an origin that also hosts sensitive pages or cookies, this becomes a
+stored-XSS risk. Treat an upload directory as untrusted content, serve it from a
+separate origin, or keep uploads disabled.
+
+### No CSRF/Host validation
+
+There is no `Origin`/`Host` allowlist and no CSRF token. A browser on the same
+machine can attempt requests to `127.0.0.1:8080`; modern cross-origin `PUT`
+requests trigger CORS preflight, which this server does not answer, but do not
+rely on that as a security boundary. Keep the default loopback bind and do not
+enable uploads on a machine where arbitrary local web content is a concern.
+
+### Disk exhaustion
+
+The 1 GiB per-request cap is not a disk quota. Repeated uploads can fill the
+filesystem. Use a dedicated filesystem/quota and monitor free space.
+
+### `--replace` is destructive
+
+`--replace` truncates an existing file in place before writing the new body. A
+failed replacement can lose the original. Use it only where that is acceptable;
+atomic temp+rename uploads are roadmap.
 
 ### `accept` errors terminate the process
 
 `EMFILE`, a broken listener, or another non-`EINTR` accept error causes a clean
 exit with status 1. This is a denial-of-service vector under fd exhaustion.
+
+### `--no-index` is not access control
+
+`--no-index` only disables generated directory pages. Any file whose URL you
+know is still served. Use filesystem permissions, a separate root, or a reverse
+proxy for access control.
 
 ### No rate limiting or connection cap
 
@@ -124,6 +176,9 @@ minimal document root.
 
 - Keep the default loopback bind unless you need otherwise.
 - Run as an unprivileged user with read-only access to the document root.
+- Leave `--upload` off unless you need it; never combine it with a public bind.
+- If uploads are needed, use a separate directory/origin and an authenticated
+  reverse proxy with timeouts and a body-size limit.
 - Put a reverse proxy in front for TLS, timeouts, and connection limits.
 - Do not place secrets, `.git`, source code, or private keys in the served
   directory.
@@ -135,8 +190,11 @@ minimal document root.
 
 - read/write/idle timeouts;
 - connection limits and accept backoff;
-- symlink containment;
-- fuzzing of the parser and path normalizer;
+- full symlink containment (`openat2`/component walks);
+- authentication and opt-in delete/rename;
+- CSRF/Origin/Host validation;
+- atomic temp+rename uploads and disk quotas;
+- fuzzing of the parser, path normalizer, and listing escaper;
 - TLS boundary documentation (likely a separate project);
 - seccomp/pledge-style sandboxing;
 - `Date`/`ETag`/range correctness (not security-critical, but HTTP correctness).

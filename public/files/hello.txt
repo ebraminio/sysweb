@@ -1,0 +1,4 @@
+Hello from the sysweb directory index.
+
+Run with --upload to drop files here from the browser or:
+  curl -T ./file public/files/file

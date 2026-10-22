@@ -19,6 +19,9 @@ pub const USAGE: &str = concat!(
      \x20   -p, --port <PORT>      TCP port, 1-65535 (default: 8080)\n\
      \x20   -H, --host <ADDR>      IPv4 address to bind (default: 127.0.0.1)\n\
      \x20       --backlog <N>      Listen backlog (default: 128)\n\
+     \x20       --upload           Enable PUT uploads and folder creation\n\
+     \x20       --replace          Allow uploads to replace existing files\n\
+     \x20       --no-index         Disable generated directory indexes\n\
      \x20   -q, --quiet            Suppress startup and request logs\n\
      \x20   -h, --help             Print this help\n\
      \x20   -V, --version          Print the version\n"
@@ -58,6 +61,9 @@ pub struct Config {
     addr: SocketAddr,
     backlog: u16,
     quiet: bool,
+    upload: bool,
+    replace: bool,
+    index: bool,
 }
 
 #[derive(Debug)]
@@ -77,6 +83,9 @@ impl Config {
         let mut backlog = DEFAULT_BACKLOG;
         let mut root: &[u8] = b".";
         let mut quiet = false;
+        let mut upload = false;
+        let mut replace = false;
+        let mut index = true;
 
         let mut i = 1usize; // skip argv[0]
         while i < args.len() {
@@ -90,6 +99,26 @@ impl Config {
             }
             if arg == b"--quiet" || arg == b"-q" {
                 quiet = true;
+                i += 1;
+                continue;
+            }
+            if arg == b"--upload" {
+                upload = true;
+                i += 1;
+                continue;
+            }
+            if arg == b"--replace" {
+                replace = true;
+                i += 1;
+                continue;
+            }
+            if arg == b"--no-index" {
+                index = false;
+                i += 1;
+                continue;
+            }
+            if arg == b"--index" {
+                index = true;
                 i += 1;
                 continue;
             }
@@ -152,6 +181,9 @@ impl Config {
             addr: SocketAddr::new(host, port),
             backlog,
             quiet,
+            upload,
+            replace,
+            index,
         }))
     }
 
@@ -169,6 +201,18 @@ impl Config {
 
     pub const fn quiet(&self) -> bool {
         self.quiet
+    }
+
+    pub const fn upload(&self) -> bool {
+        self.upload
+    }
+
+    pub const fn replace(&self) -> bool {
+        self.replace
+    }
+
+    pub const fn index(&self) -> bool {
+        self.index
     }
 }
 
@@ -281,6 +325,9 @@ mod tests {
         assert_eq!(config.addr().port, 8080);
         assert_eq!(config.backlog(), 128);
         assert!(!config.quiet());
+        assert!(!config.upload());
+        assert!(!config.replace());
+        assert!(config.index());
     }
 
     #[test]
@@ -295,12 +342,18 @@ mod tests {
             b"--backlog",
             b"64",
             b"-q",
+            b"--upload",
+            b"--replace",
+            b"--no-index",
         ]);
         assert_eq!(config.root(), b"/srv/www");
         assert_eq!(config.addr().ip, [0, 0, 0, 0]);
         assert_eq!(config.addr().port, 9000);
         assert_eq!(config.backlog(), 64);
         assert!(config.quiet());
+        assert!(config.upload());
+        assert!(config.replace());
+        assert!(!config.index());
     }
 
     #[test]

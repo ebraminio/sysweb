@@ -25,7 +25,12 @@ compile_error!(
      the Windows CRT-free backend is on the roadmap"
 );
 
-use super::{Error, FileInfo, Platform, Result, SocketAddr};
+use super::{DirEntry, EntryKind, Error, FileInfo, Platform, Result, SocketAddr};
+
+const DIR_BUFFER: usize = 4096;
+const DT_DIR: u8 = 4;
+const DT_REG: u8 = 8;
+const DT_LNK: u8 = 10;
 
 /// The current OS backend. Zero-sized: all state lives in OS handles.
 #[derive(Default)]
@@ -41,6 +46,13 @@ pub struct Stream {
 
 pub struct File {
     fd: i32,
+}
+
+pub struct Dir {
+    fd: i32,
+    buffer: [u8; DIR_BUFFER],
+    len: usize,
+    pos: usize,
 }
 
 impl Drop for Listener {
@@ -61,10 +73,17 @@ impl Drop for File {
     }
 }
 
+impl Drop for Dir {
+    fn drop(&mut self) {
+        let _ = abi::close(self.fd);
+    }
+}
+
 impl Platform for Sys {
     type Listener = Listener;
     type Stream = Stream;
     type File = File;
+    type Dir = Dir;
 
     fn bind(&mut self, addr: SocketAddr, backlog: u16) -> Result<Self::Listener> {
         let listener = Listener { fd: abi::socket()? };
@@ -128,6 +147,125 @@ impl Platform for Sys {
     fn read_file(&mut self, file: &mut Self::File, buf: &mut [u8]) -> Result<usize> {
         loop {
             match abi::read(file.fd, buf) {
+                Err(Error::Interrupted) => continue,
+                other => return other,
+            }
+        }
+    }
+
+    fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir> {
+        loop {
+            match abi::open_dir(path) {
+                Err(Error::Interrupted) => continue,
+                Ok(fd) => {
+                    return Ok(Dir {
+                        fd,
+                        buffer: [0; DIR_BUFFER],
+                        len: 0,
+                        pos: 0,
+                    })
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn next_dir(&mut self, dir: &mut Self::Dir, name: &mut [u8]) -> Result<Option<DirEntry>> {
+        loop {
+            if dir.pos == dir.len {
+                let count = loop {
+                    match abi::getdents(dir.fd, &mut dir.buffer) {
+                        Err(Error::Interrupted) => continue,
+                        other => break other?,
+                    }
+                };
+                if count == 0 {
+                    return Ok(None);
+                }
+                dir.len = count;
+                dir.pos = 0;
+            }
+
+            let (name_off, name_len, reclen, dtype) =
+                match abi::dirent_at(&dir.buffer[..dir.len], dir.pos) {
+                    Some(entry) => entry,
+                    None => return Err(Error::InvalidInput),
+                };
+            dir.pos += reclen;
+
+            if name_len > name.len() {
+                return Err(Error::InvalidInput);
+            }
+            name[..name_len].copy_from_slice(&dir.buffer[name_off..name_off + name_len]);
+            let entry_name = &name[..name_len];
+            if entry_name == b"." || entry_name == b".." || name_len == 0 {
+                continue;
+            }
+
+            let mut kind = match dtype {
+                DT_DIR => EntryKind::Dir,
+                DT_REG => EntryKind::File,
+                DT_LNK => EntryKind::Symlink,
+                _ => EntryKind::Other,
+            };
+            let info =
+                abi::fstat_at(dir.fd, entry_name, kind == EntryKind::Symlink).unwrap_or(FileInfo {
+                    len: 0,
+                    is_dir: false,
+                    mtime: 0,
+                });
+            if kind == EntryKind::Other {
+                kind = if info.is_dir {
+                    EntryKind::Dir
+                } else {
+                    EntryKind::File
+                };
+            }
+
+            return Ok(Some(DirEntry {
+                name_len,
+                kind,
+                len: info.len,
+                mtime: info.mtime,
+            }));
+        }
+    }
+
+    fn create_file(&mut self, path: &[u8], replace: bool) -> Result<Self::File> {
+        loop {
+            match abi::create_file(path, replace) {
+                Err(Error::Interrupted) => continue,
+                Ok(fd) => return Ok(File { fd }),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn write_file(&mut self, file: &mut Self::File, buf: &[u8]) -> Result<()> {
+        let mut written = 0usize;
+        while written < buf.len() {
+            match abi::write(file.fd, &buf[written..]) {
+                Ok(0) => return Err(Error::BrokenPipe),
+                Ok(count) => written += count,
+                Err(Error::Interrupted) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
+    fn create_dir(&mut self, path: &[u8]) -> Result<()> {
+        loop {
+            match abi::create_dir(path) {
+                Err(Error::Interrupted) => continue,
+                other => return other,
+            }
+        }
+    }
+
+    fn remove_file(&mut self, path: &[u8]) -> Result<()> {
+        loop {
+            match abi::remove_file(path) {
                 Err(Error::Interrupted) => continue,
                 other => return other,
             }

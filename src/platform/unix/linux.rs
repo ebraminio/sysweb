@@ -20,8 +20,12 @@ mod nr {
     pub const BIND: usize = 49;
     pub const LISTEN: usize = 50;
     pub const SETSOCKOPT: usize = 54;
+    pub const GETDENTS64: usize = 217;
     pub const EXIT_GROUP: usize = 231;
     pub const OPENAT: usize = 257;
+    pub const MKDIRAT: usize = 258;
+    pub const NEWFSTATAT: usize = 262;
+    pub const UNLINKAT: usize = 263;
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -36,8 +40,12 @@ mod nr {
     pub const BIND: usize = 200;
     pub const LISTEN: usize = 201;
     pub const SETSOCKOPT: usize = 208;
+    pub const GETDENTS64: usize = 61;
     pub const EXIT_GROUP: usize = 94;
     pub const OPENAT: usize = 56;
+    pub const MKDIRAT: usize = 34;
+    pub const NEWFSTATAT: usize = 79;
+    pub const UNLINKAT: usize = 35;
 }
 
 use nr::*;
@@ -48,15 +56,26 @@ const SOL_SOCKET: usize = 1;
 const SO_REUSEADDR: usize = 2;
 const MSG_NOSIGNAL: usize = 0x4000;
 const AT_FDCWD: usize = (-100isize) as usize;
+const AT_SYMLINK_NOFOLLOW: usize = 0x100;
+
 const O_RDONLY: usize = 0;
+const O_WRONLY: usize = 1;
+const O_CREAT: usize = 0x40;
+const O_EXCL: usize = 0x80;
+const O_TRUNC: usize = 0x200;
+const O_DIRECTORY: usize = 0x10000;
+const O_NOFOLLOW: usize = 0x20000;
+const MODE_FILE: usize = 0o644;
+const MODE_DIR: usize = 0o755;
 
 /// `struct stat` offsets, verified against the Linux UAPI for both ABIs.
-/// st_mode is a u32 on Linux and st_size is a signed 64-bit off_t.
+/// st_mode is a u32 on Linux, st_size and st_mtime are signed 64-bit values.
 #[cfg(target_arch = "x86_64")]
 const STAT_MODE_OFFSET: usize = 24;
 #[cfg(target_arch = "aarch64")]
 const STAT_MODE_OFFSET: usize = 16;
 const STAT_SIZE_OFFSET: usize = 48;
+const STAT_MTIME_OFFSET: usize = 88;
 const STAT_BUFFER_SIZE: usize = 144;
 const S_IFMT: u32 = 0o170000;
 const S_IFDIR: u32 = 0o040000;
@@ -131,13 +150,30 @@ fn map_errno(errno: i32) -> Error {
         11 => Error::WouldBlock,
         2 | 20 => Error::NotFound,
         13 => Error::PermissionDenied,
+        40 => Error::PermissionDenied, // ELOOP: symlink with O_NOFOLLOW
+        17 => Error::AlreadyExists,
         21 => Error::IsADirectory,
         23 | 24 => Error::TooManyOpenFiles,
         104 => Error::ConnectionReset,
         32 => Error::BrokenPipe,
-        22 => Error::InvalidInput,
+        22 | 36 => Error::InvalidInput,
         other => Error::Other(other),
     }
+}
+
+fn c_path(path: &[u8]) -> Result<[u8; MAX_PATH]> {
+    if path.len() >= MAX_PATH || path.contains(&0) {
+        return Err(Error::InvalidInput);
+    }
+    let mut buffer = [0u8; MAX_PATH];
+    buffer[..path.len()].copy_from_slice(path);
+    Ok(buffer)
+}
+
+fn open_path(path: &[u8], flags: usize, mode: usize) -> Result<i32> {
+    let path = c_path(path)?;
+    let result = unsafe { syscall6(OPENAT, AT_FDCWD, path.as_ptr() as usize, flags, mode, 0, 0) };
+    Ok(decode(result)? as i32)
 }
 
 #[repr(C)]
@@ -215,6 +251,21 @@ pub fn read(fd: i32, buf: &mut [u8]) -> Result<usize> {
     decode(result)
 }
 
+pub fn write(fd: i32, buf: &[u8]) -> Result<usize> {
+    let result = unsafe {
+        syscall6(
+            WRITE,
+            fd as usize,
+            buf.as_ptr() as usize,
+            buf.len(),
+            0,
+            0,
+            0,
+        )
+    };
+    decode(result)
+}
+
 pub fn send(fd: i32, buf: &[u8]) -> Result<usize> {
     let result = unsafe {
         syscall6(
@@ -233,18 +284,7 @@ pub fn send(fd: i32, buf: &[u8]) -> Result<usize> {
 pub fn write_fd(fd: i32, buf: &[u8]) {
     let mut written = 0usize;
     while written < buf.len() {
-        let result = unsafe {
-            syscall6(
-                WRITE,
-                fd as usize,
-                buf.as_ptr().add(written) as usize,
-                buf.len() - written,
-                0,
-                0,
-                0,
-            )
-        };
-        match decode(result) {
+        match write(fd, &buf[written..]) {
             Ok(0) => return,
             Ok(count) => written += count,
             Err(Error::Interrupted) => continue,
@@ -259,29 +299,89 @@ pub fn close(fd: i32) -> Result<()> {
 }
 
 pub fn open(path: &[u8]) -> Result<i32> {
-    if path.len() >= MAX_PATH || path.contains(&0) {
-        return Err(Error::InvalidInput);
-    }
-    let mut c_path = [0u8; MAX_PATH];
-    c_path[..path.len()].copy_from_slice(path);
-    c_path[path.len()] = 0;
+    open_path(path, O_RDONLY | O_NOFOLLOW, 0)
+}
 
+pub fn open_dir(path: &[u8]) -> Result<i32> {
+    open_path(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0)
+}
+
+pub fn create_file(path: &[u8], replace: bool) -> Result<i32> {
+    let flags = O_WRONLY | O_CREAT | O_NOFOLLOW | if replace { O_TRUNC } else { O_EXCL };
+    open_path(path, flags, MODE_FILE)
+}
+
+pub fn create_dir(path: &[u8]) -> Result<()> {
+    let path = c_path(path)?;
+    let result = unsafe { syscall6(MKDIRAT, AT_FDCWD, path.as_ptr() as usize, MODE_DIR, 0, 0, 0) };
+    decode(result).map(|_| ())
+}
+
+pub fn remove_file(path: &[u8]) -> Result<()> {
+    let path = c_path(path)?;
+    let result = unsafe { syscall6(UNLINKAT, AT_FDCWD, path.as_ptr() as usize, 0, 0, 0, 0) };
+    decode(result).map(|_| ())
+}
+
+pub fn getdents(fd: i32, buf: &mut [u8]) -> Result<usize> {
     let result = unsafe {
         syscall6(
-            OPENAT,
-            AT_FDCWD,
-            c_path.as_ptr() as usize,
-            O_RDONLY,
+            GETDENTS64,
+            fd as usize,
+            buf.as_mut_ptr() as usize,
+            buf.len(),
             0,
             0,
             0,
         )
     };
-    Ok(decode(result)? as i32)
+    decode(result)
+}
+
+/// Decode one `linux_dirent64` record at `pos`.
+/// Returns `(name_offset, name_length, record_length, d_type)`.
+pub fn dirent_at(buf: &[u8], pos: usize) -> Option<(usize, usize, usize, u8)> {
+    if pos + 19 > buf.len() {
+        return None;
+    }
+    let record_len = read_u16(buf, pos + 16)? as usize;
+    if record_len < 19 || pos + record_len > buf.len() {
+        return None;
+    }
+    let name_offset = pos + 19;
+    let record_end = pos + record_len;
+    let mut name_end = name_offset;
+    while name_end < record_end && buf[name_end] != 0 {
+        name_end += 1;
+    }
+    Some((
+        name_offset,
+        name_end - name_offset,
+        record_len,
+        buf[pos + 18],
+    ))
+}
+
+fn read_u16(buf: &[u8], at: usize) -> Option<u16> {
+    if at + 2 > buf.len() {
+        return None;
+    }
+    Some(unsafe { read_unaligned(buf.as_ptr().add(at) as *const u16) })
 }
 
 #[repr(C, align(8))]
 struct StatBuffer([u8; STAT_BUFFER_SIZE]);
+
+fn parse_stat(buffer: &StatBuffer) -> FileInfo {
+    let mode = unsafe { read_unaligned(buffer.0.as_ptr().add(STAT_MODE_OFFSET) as *const u32) };
+    let size = unsafe { read_unaligned(buffer.0.as_ptr().add(STAT_SIZE_OFFSET) as *const i64) };
+    let mtime = unsafe { read_unaligned(buffer.0.as_ptr().add(STAT_MTIME_OFFSET) as *const i64) };
+    FileInfo {
+        len: if size < 0 { 0 } else { size as u64 },
+        is_dir: mode & S_IFMT == S_IFDIR,
+        mtime,
+    }
+}
 
 pub fn fstat(fd: i32) -> Result<FileInfo> {
     let mut buffer = StatBuffer([0; STAT_BUFFER_SIZE]);
@@ -297,14 +397,26 @@ pub fn fstat(fd: i32) -> Result<FileInfo> {
         )
     };
     decode(result)?;
+    Ok(parse_stat(&buffer))
+}
 
-    let mode = unsafe { read_unaligned(buffer.0.as_ptr().add(STAT_MODE_OFFSET) as *const u32) };
-    let size = unsafe { read_unaligned(buffer.0.as_ptr().add(STAT_SIZE_OFFSET) as *const i64) };
-
-    Ok(FileInfo {
-        len: if size < 0 { 0 } else { size as u64 },
-        is_dir: mode & S_IFMT == S_IFDIR,
-    })
+pub fn fstat_at(dir_fd: i32, name: &[u8], nofollow: bool) -> Result<FileInfo> {
+    let path = c_path(name)?;
+    let flags = if nofollow { AT_SYMLINK_NOFOLLOW } else { 0 };
+    let mut buffer = StatBuffer([0; STAT_BUFFER_SIZE]);
+    let result = unsafe {
+        syscall6(
+            NEWFSTATAT,
+            dir_fd as usize,
+            path.as_ptr() as usize,
+            buffer.0.as_mut_ptr() as usize,
+            flags,
+            0,
+            0,
+        )
+    };
+    decode(result)?;
+    Ok(parse_stat(&buffer))
 }
 
 pub fn exit(code: i32) -> ! {

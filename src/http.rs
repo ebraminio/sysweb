@@ -7,6 +7,7 @@
 pub enum Method {
     Get,
     Head,
+    Put,
 }
 
 impl Method {
@@ -14,6 +15,7 @@ impl Method {
         match self {
             Method::Get => b"GET",
             Method::Head => b"HEAD",
+            Method::Put => b"PUT",
         }
     }
 }
@@ -25,12 +27,16 @@ pub enum Version {
     Http11,
 }
 
-/// A parsed request line. Header fields are intentionally not retained yet.
+/// A parsed request line plus the two headers the server interprets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Request<'a> {
     pub method: Method,
     pub target: &'a [u8],
     pub version: Version,
+    pub content_length: Option<u64>,
+    pub expect_continue: bool,
+    /// Index just past `\r\n\r\n`; body bytes may already follow in the buffer.
+    pub body_offset: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +78,7 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
     let method = match method {
         b"GET" => Method::Get,
         b"HEAD" => Method::Head,
+        b"PUT" => Method::Put,
         _ => return Err(ParseError::UnsupportedMethod),
     };
     let version = match version {
@@ -85,21 +92,93 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
         return Err(ParseError::Malformed);
     }
 
+    let mut content_length = None;
+    let mut expect_continue = false;
+    if line_end + 2 <= head.len() {
+        for header_line in head[line_end + 2..].split(|&b| b == b'\n') {
+            let header_line = header_line.strip_suffix(b"\r").unwrap_or(header_line);
+            if header_line.is_empty() {
+                continue;
+            }
+            let colon = header_line
+                .iter()
+                .position(|&b| b == b':')
+                .ok_or(ParseError::Malformed)?;
+            let name = trim(&header_line[..colon]);
+            let value = trim(&header_line[colon + 1..]);
+
+            if name.eq_ignore_ascii_case(b"content-length") {
+                let parsed = parse_u64(value).ok_or(ParseError::Malformed)?;
+                match content_length {
+                    Some(previous) if previous != parsed => return Err(ParseError::Malformed),
+                    Some(_) => {}
+                    None => content_length = Some(parsed),
+                }
+            } else if name.eq_ignore_ascii_case(b"transfer-encoding") {
+                // Chunked request bodies are not implemented; never guess.
+                return Err(ParseError::Malformed);
+            } else if name.eq_ignore_ascii_case(b"expect") {
+                expect_continue = value.eq_ignore_ascii_case(b"100-continue");
+            }
+        }
+    }
+
     Ok(Request {
         method,
         target,
         version,
+        content_length,
+        expect_continue,
+        body_offset: end,
     })
+}
+
+fn trim(mut value: &[u8]) -> &[u8] {
+    while let [first, rest @ ..] = value {
+        if first == &b' ' || first == &b'\t' {
+            value = rest;
+        } else {
+            break;
+        }
+    }
+    while let [rest @ .., last] = value {
+        if last == &b' ' || last == &b'\t' {
+            value = rest;
+        } else {
+            break;
+        }
+    }
+    value
+}
+
+fn parse_u64(value: &[u8]) -> Option<u64> {
+    if value.is_empty() {
+        return None;
+    }
+    let mut number = 0u64;
+    for &byte in value {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        number = number.checked_mul(10)?;
+        number = number.checked_add((byte - b'0') as u64)?;
+    }
+    Some(number)
 }
 
 /// Response status codes used by the server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Ok,
+    Created,
+    MovedPermanently,
     BadRequest,
     Forbidden,
     NotFound,
     MethodNotAllowed,
+    Conflict,
+    LengthRequired,
+    PayloadTooLarge,
     UriTooLong,
     RequestHeaderFieldsTooLarge,
     InternalServerError,
@@ -110,10 +189,15 @@ impl Status {
     pub const fn code(self) -> u16 {
         match self {
             Status::Ok => 200,
+            Status::Created => 201,
+            Status::MovedPermanently => 301,
             Status::BadRequest => 400,
             Status::Forbidden => 403,
             Status::NotFound => 404,
             Status::MethodNotAllowed => 405,
+            Status::Conflict => 409,
+            Status::LengthRequired => 411,
+            Status::PayloadTooLarge => 413,
             Status::UriTooLong => 414,
             Status::RequestHeaderFieldsTooLarge => 431,
             Status::InternalServerError => 500,
@@ -124,10 +208,15 @@ impl Status {
     pub const fn reason(self) -> &'static [u8] {
         match self {
             Status::Ok => b"OK",
+            Status::Created => b"Created",
+            Status::MovedPermanently => b"Moved Permanently",
             Status::BadRequest => b"Bad Request",
             Status::Forbidden => b"Forbidden",
             Status::NotFound => b"Not Found",
             Status::MethodNotAllowed => b"Method Not Allowed",
+            Status::Conflict => b"Conflict",
+            Status::LengthRequired => b"Length Required",
+            Status::PayloadTooLarge => b"Payload Too Large",
             Status::UriTooLong => b"URI Too Long",
             Status::RequestHeaderFieldsTooLarge => b"Request Header Fields Too Large",
             Status::InternalServerError => b"Internal Server Error",
@@ -135,14 +224,17 @@ impl Status {
         }
     }
 
-    /// A complete, static error body. Empty for 200.
+    /// A complete, static error body. Empty for successful/redirect statuses.
     pub const fn error_body(self) -> &'static [u8] {
         match self {
-            Status::Ok => b"",
+            Status::Ok | Status::Created | Status::MovedPermanently => b"",
             Status::BadRequest => b"400 Bad Request\n",
             Status::Forbidden => b"403 Forbidden\n",
             Status::NotFound => b"404 Not Found\n",
             Status::MethodNotAllowed => b"405 Method Not Allowed\n",
+            Status::Conflict => b"409 Conflict\n",
+            Status::LengthRequired => b"411 Length Required\n",
+            Status::PayloadTooLarge => b"413 Payload Too Large\n",
             Status::UriTooLong => b"414 URI Too Long\n",
             Status::RequestHeaderFieldsTooLarge => b"431 Request Header Fields Too Large\n",
             Status::InternalServerError => b"500 Internal Server Error\n",
@@ -168,10 +260,54 @@ mod tests {
         assert_eq!(r.method, Method::Get);
         assert_eq!(r.target, b"/index.html");
         assert_eq!(r.version, Version::Http11);
+        assert_eq!(r.content_length, None);
+        assert_eq!(r.body_offset, 37);
 
         let r = parse(b"HEAD / HTTP/1.0\r\n\r\n").unwrap();
         assert_eq!(r.method, Method::Head);
         assert_eq!(r.version, Version::Http10);
+    }
+
+    #[test]
+    fn parses_put_headers_and_body_offset() {
+        let raw =
+            b"PUT /file.txt HTTP/1.1\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\nhello";
+        let r = parse(raw).unwrap();
+        assert_eq!(r.method, Method::Put);
+        assert_eq!(r.content_length, Some(5));
+        assert!(r.expect_continue);
+        assert_eq!(&raw[r.body_offset..], b"hello");
+    }
+
+    #[test]
+    fn accepts_repeated_equal_content_length() {
+        let r =
+            parse(b"PUT /x HTTP/1.1\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n").unwrap();
+        assert_eq!(r.content_length, Some(0));
+    }
+
+    #[test]
+    fn rejects_bad_headers() {
+        assert_eq!(
+            parse(b"PUT /x HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n"),
+            Err(ParseError::Malformed)
+        );
+        assert_eq!(
+            parse(b"PUT /x HTTP/1.1\r\nContent-Length: nope\r\n\r\n"),
+            Err(ParseError::Malformed)
+        );
+        assert_eq!(
+            parse(b"PUT /x HTTP/1.1\r\nContent-Length: 18446744073709551616\r\n\r\n"),
+            Err(ParseError::Malformed)
+        );
+        assert_eq!(
+            parse(b"PUT /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"),
+            Err(ParseError::Malformed)
+        );
+        assert_eq!(
+            parse(b"PUT /x HTTP/1.1\r\nNoColonHere\r\n\r\n"),
+            Err(ParseError::Malformed)
+        );
     }
 
     #[test]
@@ -207,9 +343,14 @@ mod tests {
     fn status_table_is_consistent() {
         assert_eq!(Status::Ok.code(), 200);
         assert_eq!(Status::Ok.error_body(), b"");
+        assert_eq!(Status::Created.code(), 201);
+        assert_eq!(Status::MovedPermanently.code(), 301);
         assert_eq!(Status::NotFound.code(), 404);
         assert_eq!(Status::NotFound.reason(), b"Not Found");
         assert_eq!(Status::NotFound.error_body(), b"404 Not Found\n");
+        assert_eq!(Status::Conflict.code(), 409);
+        assert_eq!(Status::LengthRequired.code(), 411);
+        assert_eq!(Status::PayloadTooLarge.code(), 413);
         assert_eq!(Status::RequestHeaderFieldsTooLarge.code(), 431);
     }
 }

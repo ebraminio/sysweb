@@ -17,7 +17,7 @@ Goals:
 7. A blocking implementation that already has the shape of the async one.
 
 Non-goals for now: TLS, dynamic content, CGI, compression, virtual hosts,
-directory listings, and hardening for hostile public traffic.
+authentication, and hardening for hostile public traffic.
 
 ## Layers
 
@@ -27,7 +27,10 @@ directory listings, and hardening for hostile public traffic.
 │   _start (Linux) / _main (macOS), panic handler, mem* shims  │
 ├──────────────────────────────────────────────────────────────┤
 │ src/server.rs                                                │
-│   accept loop, fixed buffers, response writer, logging       │
+│   accept loop, fixed buffers, uploads, response writer, logs │
+├──────────────────────────────────────────────────────────────┤
+│ src/listing.rs                                               │
+│   self-contained directory page in a 64 KiB fixed buffer     │
 ├──────────────────────────────────────────────────────────────┤
 │ src/http.rs  src/path.rs  src/mime.rs  src/config.rs         │
 │   pure, safe, allocation-free                                │
@@ -36,7 +39,7 @@ directory listings, and hardening for hostile public traffic.
 │   trait Platform; Error; SocketAddr; FileInfo                │
 ├──────────────────────────────────────────────────────────────┤
 │ src/platform/unix/mod.rs                                     │
-│   RAII Listener/Stream/File; shared Unix operation logic     │
+│   RAII Listener/Stream/File/Dir; shared Unix logic           │
 ├──────────────────────────────────────────────────────────────┤
 │ src/platform/unix/linux.rs  src/platform/unix/darwin.rs      │
 │   raw syscall numbers, registers, struct layouts             │
@@ -53,6 +56,7 @@ pub trait Platform {
     type Listener;
     type Stream;
     type File;
+    type Dir;
 
     fn bind(&mut self, addr: SocketAddr, backlog: u16) -> Result<Self::Listener>;
     fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
@@ -63,6 +67,15 @@ pub trait Platform {
     fn file_info(&mut self, file: &Self::File) -> Result<FileInfo>;
     fn read_file(&mut self, file: &mut Self::File, buf: &mut [u8]) -> Result<usize>;
 
+    fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir>;
+    fn next_dir(&mut self, dir: &mut Self::Dir, name: &mut [u8])
+        -> Result<Option<DirEntry>>;
+
+    fn create_file(&mut self, path: &[u8], replace: bool) -> Result<Self::File>;
+    fn write_file(&mut self, file: &mut Self::File, buf: &[u8]) -> Result<()>;
+    fn create_dir(&mut self, path: &[u8]) -> Result<()>;
+    fn remove_file(&mut self, path: &[u8]) -> Result<()>;
+
     fn log(&mut self, message: &[u8]);
     fn exit(&mut self, code: i32) -> !;
 }
@@ -72,9 +85,9 @@ Design notes:
 
 - **Generic, not `dyn`.** The server is monomorphized for `platform::Sys`.
   There is no vtable and no allocation.
-- **RAII handles.** `Listener`, `Stream`, and `File` own an `i32` fd and close
-  it in `Drop`. The server never calls `close` manually, so early returns and
-  error paths cannot leak.
+- **RAII handles.** `Listener`, `Stream`, `File`, and `Dir` own an `i32` fd
+  and close it in `Drop`. The server never calls `close` manually, so early
+  returns and error paths cannot leak.
 - **Caller-provided buffers.** No method allocates. The backend fills the
   caller's slice, and all sizes are bounded by the caller.
 - **`&mut self`.** A future reactor keeps its epoll/kqueue/IOCP state inside
@@ -98,8 +111,12 @@ Design notes:
 | `bind` | 49 | 200 |
 | `listen` | 50 | 201 |
 | `setsockopt` | 54 | 208 |
+| `getdents64` | 217 | 61 |
 | `exit_group` | 231 | 94 |
 | `openat` | 257 | 56 |
+| `mkdirat` | 258 | 34 |
+| `newfstatat` | 262 | 79 |
+| `unlinkat` | 263 | 35 |
 
 Conventions:
 
@@ -114,16 +131,18 @@ declare the clobbered registers. They are `unsafe fn`, called only from the
 
 ### `struct stat`
 
-`fstat` fills a 144-byte buffer. Only two fields are read:
+`fstat`/`fstatat` fill a 144-byte buffer. Three fields are read:
 
-| ABI | `st_mode` | `st_size` |
-| --- | ---: | ---: |
-| x86_64 Linux | 24 (`u32`) | 48 (`i64`) |
-| aarch64 Linux | 16 (`u32`) | 48 (`i64`) |
-| macOS arm64 | 8 (`u16`) | 72 (`i64`) |
+| ABI | `st_mode` | `st_size` | `st_mtime` |
+| --- | ---: | ---: | ---: |
+| x86_64 Linux | 24 (`u32`) | 48 (`i64`) | 88 (`i64`) |
+| aarch64 Linux | 16 (`u32`) | 48 (`i64`) | 88 (`i64`) |
+| macOS arm64 | 8 (`u16`) | 72 (`i64`) | 40 (`i64`) |
 
 The buffer is `#[repr(C, align(8))]` to be safe for the kernel's copy-out.
-`st_mode & 0170000 == 0040000` detects a directory.
+`st_mode & 0170000 == 0040000` detects a directory. `st_mtime` drives the
+directory index's modification column and is formatted with a stack-only
+civil-from-days conversion (UTC; the page upgrades it to local time in JS).
 
 ### No-libc linking
 
@@ -138,7 +157,7 @@ libgcc. `compiler_builtins` still provides integer helpers. The binary provides:
 
 - `_start` (assembly) which extracts `argc`/`argv` from the initial stack,
   aligns the stack, and calls `sysweb_entry`;
-- `memcpy`, `memmove`, `memset`, `memcmp`, `bcmp`, `bzero`, `strlen`;
+- `memcpy`, `memmove`, `memset`, `memcmp`, `bcmp`, `bzero`;
 - `rust_eh_personality` (a no-op) and `__stack_chk_fail`;
 - a `panic_handler` that writes a fixed message and calls `exit_group(101)`.
 
@@ -182,10 +201,13 @@ the LTO binary, not just the debug build.
 
 Numbers used (Apple Silicon): `read` 3, `write` 4, `close` 6, `fstat` 189,
 `socket` 97, `accept` 30, `sendto` 133, `bind` 104, `listen` 106,
-`setsockopt` 105, `openat` 463, `exit` 1.
+`setsockopt` 105, `getdirentries64` 344, `openat` 463, `fstatat` 469,
+`unlinkat` 472, `mkdirat` 475, `exit` 1.
 
 `AT_FDCWD` is `-2`, `sockaddr_in` begins with a length byte, `SOL_SOCKET` is
-`0xffff`, `SO_REUSEADDR` is `4`, and `MSG_NOSIGNAL` is `0x80000`.
+`0xffff`, `SO_REUSEADDR` is `4`, and `MSG_NOSIGNAL` is `0x80000`. Directory
+records come from `getdirentries64`; the 64-bit `struct dirent` has `d_reclen`
+at 16, `d_namlen` at 18, `d_type` at 20, and the name at 21.
 
 ### Kernel `struct stat` vs. userspace `struct stat`
 
@@ -217,27 +239,77 @@ not implemented yet.
 
 1. `read_request` reads into an 8 KiB stack buffer until `\r\n\r\n` is found,
    EOF is reached, or the buffer is full (431).
-2. `http::parse` validates the request line: `GET`/`HEAD`, origin-form target,
-   `HTTP/1.0` or `HTTP/1.1`. Other methods return 405; other versions 505.
+2. `http::parse` validates the request line (`GET`, `HEAD`, or `PUT`), the
+   origin-form target, and `HTTP/1.0`/`HTTP/1.1`. It also extracts
+   `Content-Length` and `Expect: 100-continue`. Chunked bodies are rejected;
+   conflicting `Content-Length` values are 400.
 3. `path::normalize` strips the query, percent-decodes once, rejects NUL,
    backslash and control bytes, drops empty/`.` segments, rejects escaping
    `..`, and preserves a trailing slash. Result: at most 1 KiB.
-4. `path::join` prefixes the document root and appends `index.html` when the
-   URL path ends in `/`. It re-checks for `..` segments as defense in depth.
-   Result: at most 1.5 KiB including NUL.
-5. `Platform::open` opens the path read-only. `file_info` gets size and mode.
-   Directories are 404 in this milestone.
-6. The response header is built in a 512-byte `FixedBuf`: status line, `Server`,
-   `Content-Type`, `Content-Length`, optional `Allow`, `Connection: close`.
-7. The file is streamed in 16 KiB chunks. `HEAD` sends only the header. The
+4. `path::join_dir` prefixes the document root without adding an index. A
+   subsequent `append_index` tries `index.html` only for directory URLs. Both
+   re-check for `..` segments as defense in depth.
+5. `Platform::open` opens the path read-only with `O_NOFOLLOW` on the final
+   component. `file_info` gets size, mode, and mtime.
+6. A regular file streams in 16 KiB chunks. `HEAD` sends only the header. The
    loop stops after exactly `Content-Length` bytes, so a growing file cannot
    overrun the advertised length.
-8. `Connection: close`: the stream is dropped, closing the fd. There is no
-   keep-alive state yet.
+7. A directory URL without a trailing slash gets a 301 to the slashed form. A
+   directory with `/` gets `index.html` if it exists; otherwise the built-in
+   index is rendered, unless `--no-index` is set (403).
+8. A `PUT` body is streamed to a file or creates one directory. `Expect` is
+   answered with an interim `100 Continue` before the socket is read.
+9. The response header is built in a 4 KiB `FixedBuf`: status line, `Server`,
+   `Content-Type`, `Content-Length`, optional `Allow`/`Location`, and
+   `Connection: close`.
+10. `Connection: close`: the stream is dropped, closing the fd. There is no
+    keep-alive state yet.
 
-The HTTP, path, MIME, and config modules are exercised by unit tests with `std`
-enabled; the library itself is `no_std` whenever it is not compiled as a test
-target.
+The HTTP, path, MIME, config, and listing modules are exercised by unit tests
+with `std` enabled; the library itself is `no_std` whenever it is not compiled
+as a test target.
+
+## Directory index
+
+`listing::render` builds a complete HTML page in a 64 KiB `FixedBuf`:
+
+- breadcrumb links are URL-encoded segment by segment and HTML-escaped;
+- entries come from a 4 KiB `getdents` buffer; names are copied into a 256-byte
+  caller buffer and never allocated;
+- each entry is `fstatat`-ed for size and mtime; symlinks use
+  `AT_SYMLINK_NOFOLLOW` and are rendered as unlinked `link` rows;
+- names are escaped for HTML and percent-encoded for `href`, so `&`, `<`, `>`,
+  `"`, `'`, `%`, spaces, and non-ASCII bytes cannot break the markup;
+- sizes use SI units and timestamps use UTC `YYYY-MM-DD HH:MM`; inline JS
+  upgrades the timestamps to the viewer's local time and sorts columns;
+- the page's CSS and JS are `const` byte strings compiled into the binary —
+  there are no external assets;
+- if the buffer fills, the listing is truncated with a visible notice rather
+  than growing or panicking.
+
+The page is served with `Content-Length` computed from the buffer, so `HEAD`
+works without special-casing.
+
+## Uploads
+
+`PUT` is deliberately a raw-body protocol, not multipart:
+
+- `Content-Length` is mandatory for file uploads (411 otherwise), and bodies
+  above 1 GiB are rejected with 413 before reading;
+- bytes already buffered after the header block are written first, then the
+  socket is streamed in 16 KiB chunks;
+- `Expect: 100-continue` is answered only when the body is not already
+  buffered;
+- the body is written with `write` to a file opened `O_WRONLY|O_CREAT` plus
+  `O_EXCL` (409 on conflict) or `O_TRUNC` with `--replace`;
+- `PUT /dir/` strips the trailing slash and calls `mkdirat` once; parent
+  directories are not created automatically;
+- a failed upload (early EOF, write error) closes the file, unlinks it, and
+  returns 400/500, so a partial file does not linger;
+- uploads are disabled unless `--upload` is passed.
+
+The browser UI uses `XMLHttpRequest` with `PUT` for progress; `curl -T FILE URL`
+works unchanged. There is no multipart parser to bound, fuzz, or maintain.
 
 ## No-allocation strategy
 
@@ -246,9 +318,12 @@ target.
 | request headers | 8 KiB | one connection |
 | normalized URL path | 1 KiB | one request |
 | filesystem path | 1.5 KiB | one request |
-| response header | 512 B | one response |
-| file chunk | 16 KiB | one file response |
-| log line | 320 B | one log event |
+| response header | 4 KiB | one response |
+| redirect `Location` | ~3 KiB | one redirect |
+| directory entries | 4 KiB | one listing |
+| directory page | 64 KiB | one listing |
+| file chunk | 16 KiB | one file response/upload |
+| log line | 1.2 KiB | one log event |
 | config root | 256 B | process |
 
 There is no `alloc` crate dependency and no `#[global_allocator]`. If a future
@@ -261,19 +336,28 @@ which is the desired failure mode.
   at 4096 bytes. The kernel/dyld guarantees NUL termination and validity.
 - Syscall buffers are local, initialized (or written by the kernel before being
   read), and bounds-checked before the call.
-- `fstat` buffers are larger than every supported ABI's struct (144 bytes).
-- File descriptors have exactly one owner. `Drop` closes; there is no manual
-  close and no double-close.
-- `write_all` advances by the kernel-returned count and rejects a zero-length
-  write as `BrokenPipe`, so it cannot spin.
+- `fstat`/`fstatat` buffers are larger than every supported ABI's struct
+  (144 bytes).
+- Directory records are bounds-checked (`reclen`, `namlen`, name range) before
+  any field is read; names are copied into a 256-byte caller buffer.
+- File descriptors have exactly one owner. `Listener`, `Stream`, `File`, and
+  `Dir` close in `Drop`; there is no manual close and no double-close.
+- `write_all`/`write_file` advance by the kernel-returned count and reject a
+  zero-length write as `BrokenPipe`, so they cannot spin.
 - Path normalization is done before the filesystem is touched; `open` is never
-  called with a path containing a `..` segment.
-- Response headers contain only static strings and decimal numbers. No
-  user-controlled bytes are reflected into headers.
+  called with a path containing a `..` segment. Final-component symlinks are
+  refused with `O_NOFOLLOW`.
+- Uploads require a `Content-Length`, never exceed 1 GiB, and stop after
+  exactly that many bytes. A failed upload is unlinked.
+- Directory HTML is escaped for text/attributes and percent-encoded for URLs;
+  names cannot inject markup or `javascript:` links.
+- Response headers contain static strings, decimal numbers, and a
+  percent-encoded `Location` path. Raw request bytes are never reflected.
 
 Known unsafe edges: the raw syscall ABI itself, the `argv` dereference, the
 `mem*` shims, and Apple's undocumented syscall ABI. All are isolated and
-reviewable.
+reviewable. Intermediate symlinked directories are a separate, documented
+containment gap.
 
 ## Async design (milestone 1)
 
@@ -337,6 +421,9 @@ enum State {
     Opening,
     WritingHeaders,
     Streaming,
+    ReadingBody,   // upload: body bytes from the socket
+    WritingFile,   // upload: body bytes to disk
+    Listing,       // bounded 64 KiB render + send
     Closing,
 }
 
@@ -356,8 +443,10 @@ in the server's stack or a static. Each event carries a slot token. There is no
 per-connection heap allocation and no unbounded queue. Idle/read/write timeouts
 come from the reactor wait timeout plus a per-slot deadline.
 
-The HTTP parser already returns a borrowed `Request<'a>`, so the async state
-machine can keep using the same code; only the I/O driver changes.
+The HTTP parser already returns a borrowed `Request<'a>`, and uploads are
+already a bounded read/write loop, so the async state machine can keep using
+the same code; only the I/O driver changes. Directory rendering stays a
+bounded in-memory step (64 KiB), so it does not need incremental state.
 
 ## Windows plan (milestone 2)
 
@@ -387,16 +476,19 @@ several.
 
 ## Testing strategy
 
-- Unit tests for request parsing, path normalization, MIME, config, and
-  `FixedBuf`.
-- One end-to-end test spawns the release/debug binary, serves real files over
-  loopback, and checks GET, HEAD, binary bodies, large files, 404, 405, 505,
-  bad request lines, percent-decoding, and traversal attempts.
+- Unit tests for request parsing (including `Content-Length`/`Expect`), path
+  normalization/joining, MIME, config, listing formatting, and `FixedBuf`.
+- Four end-to-end tests spawn the real binary over loopback and cover GET,
+  HEAD, binary bodies, large files, directory indexes, breadcrumbs/metadata,
+  HTML escaping, symlink denial, 301 redirects, 404/405/505/400/409/411/413,
+  `--no-index`, uploads, folder creation, `--replace`, missing length,
+  `Expect: 100-continue`, and traversal attempts.
 - CI runs `cargo test` and `cargo test --release` on Linux and macOS. The
   release run is mandatory because the `bzero`/LTO failure mode did not appear
   in debug builds.
-- Future: fuzz the parser and path normalizer; property-test the path
-  invariant (`..` cannot survive normalization); soak-test the async reactor.
+- Future: fuzz the parser, path normalizer, and listing escaper; property-test
+  the path invariant (`..` cannot survive normalization); soak-test the async
+  reactor and slow uploads.
 
 ## Known risks
 
@@ -404,9 +496,18 @@ several.
   supported public ABI. A future macOS release can break them.
 - **Single-threaded blocking**: no timeouts yet; a slow client can pin the
   server. This is the main reason async is milestone 1.
-- **Symlinks**: `open` follows symlinks. A link inside the root can expose a
-  file outside it. `openat2(RESOLVE_BENEATH)` on Linux or `O_NOFOLLOW` walks
-  are the planned fixes.
+- **Symlinks**: final-component links are refused with `O_NOFOLLOW`, but an
+  intermediate symlinked directory can still escape the root. A full fix needs
+  `openat2(RESOLVE_BENEATH)` on Linux or component-by-component `O_NOFOLLOW`
+  walks; this is a roadmap item.
+- **Uploads are powerful**: `--upload` lets any client that can reach the port
+  write files; `--replace` can overwrite them. There is no authentication,
+  quota, or CSRF/Host validation yet. Keep the default loopback bind.
+- **Partial files**: a failed upload is unlinked, but a successful upload is
+  written in place, not via temp+rename. `--replace` can therefore truncate an
+  existing file before a failure. Atomic uploads are roadmap.
+- **Listing truncation**: directories whose rendered page exceeds 64 KiB are
+  truncated visibly. A pagination or chunked-listing design is future work.
 - **No `Date` header**: HTTP/1.1 says servers SHOULD send one. It is a roadmap
   item because it needs a clock syscall and civil-date conversion.
 - **No keep-alive**: every response costs a TCP handshake. Acceptable for a

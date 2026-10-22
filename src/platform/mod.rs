@@ -23,6 +23,7 @@ pub enum Error {
     NotFound,
     PermissionDenied,
     IsADirectory,
+    AlreadyExists,
     TooManyOpenFiles,
     ConnectionReset,
     BrokenPipe,
@@ -55,10 +56,31 @@ impl SocketAddr {
 }
 
 /// Metadata needed to serve a file.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FileInfo {
     pub len: u64,
     pub is_dir: bool,
+    /// Seconds since the Unix epoch, as reported by `fstat`.
+    pub mtime: i64,
+}
+
+/// The kind of a directory entry, from `d_type` or a follow-up stat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Dir,
+    Symlink,
+    Other,
+}
+
+/// One directory entry. The name itself is copied into the caller's buffer;
+/// `name_len` says how much of that buffer is valid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name_len: usize,
+    pub kind: EntryKind,
+    pub len: u64,
+    pub mtime: i64,
 }
 
 /// The OS services used by the server.
@@ -70,6 +92,7 @@ pub trait Platform {
     type Listener;
     type Stream;
     type File;
+    type Dir;
 
     fn bind(&mut self, addr: SocketAddr, backlog: u16) -> Result<Self::Listener>;
     fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
@@ -80,6 +103,23 @@ pub trait Platform {
     fn open(&mut self, path: &[u8]) -> Result<Self::File>;
     fn file_info(&mut self, file: &Self::File) -> Result<FileInfo>;
     fn read_file(&mut self, file: &mut Self::File, buf: &mut [u8]) -> Result<usize>;
+
+    /// Open a directory for iteration. Symlinks in the final component are
+    /// refused.
+    fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir>;
+    /// Copy the next entry name into `name` and return its metadata. Returns
+    /// `None` at end-of-directory.
+    fn next_dir(&mut self, dir: &mut Self::Dir, name: &mut [u8]) -> Result<Option<DirEntry>>;
+
+    /// Create a file for streaming writes. Existing files are refused unless
+    /// `replace` is true, in which case they are truncated.
+    fn create_file(&mut self, path: &[u8], replace: bool) -> Result<Self::File>;
+    /// Write the whole buffer to a writable file.
+    fn write_file(&mut self, file: &mut Self::File, buf: &[u8]) -> Result<()>;
+    /// Create one directory. Parent directories must already exist.
+    fn create_dir(&mut self, path: &[u8]) -> Result<()>;
+    /// Remove a file (used to clean up a failed upload).
+    fn remove_file(&mut self, path: &[u8]) -> Result<()>;
 
     fn log(&mut self, message: &[u8]);
     fn exit(&mut self, code: i32) -> !;

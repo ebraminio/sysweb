@@ -17,6 +17,7 @@
 pub mod config;
 pub mod fixedbuf;
 pub mod http;
+pub mod listing;
 pub mod mime;
 pub mod path;
 pub mod platform;

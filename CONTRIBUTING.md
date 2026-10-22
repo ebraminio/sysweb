@@ -50,6 +50,11 @@ nm -u target/release/syswebd        # empty
   is only one implementation.
 - Fixed buffer sizes are named constants; do not scatter magic numbers.
 - Error paths return `platform::Result`; logs are short and never allocate.
+- Anything that writes to disk is opt-in and must be reflected in
+  [SECURITY.md](SECURITY.md). Uploads should stay streamed and bounded; never
+  buffer a whole request body.
+- Directory/listing output is untrusted input: HTML-escape names, URL-encode
+  hrefs, and never build markup from raw request bytes.
 - Comments should explain *why* a syscall or layout is used, not restate the
   code.
 - Avoid `unwrap`/`expect` in the library and binary. Tests may use them.
@@ -69,10 +74,15 @@ PR should include:
 
 ## Adding HTTP features
 
-Add pure logic to `src/http.rs` or `src/path.rs` with unit tests first. The
-server should stay a thin state machine over `Platform`; avoid putting parsing
-or path policy in the I/O loop. If a feature needs a new response header,
-update the 512-byte header budget and the e2e assertions.
+Add pure logic to `src/http.rs`, `src/path.rs`, or `src/listing.rs` with unit
+tests first. The server should stay a thin state machine over `Platform`; avoid
+putting parsing or path policy in the I/O loop. If a feature needs a new
+response header, update the 4 KiB header budget and the e2e assertions.
+Directory pages fit in 64 KiB; if a change can exceed that, add truncation
+behavior and a test.
+
+Uploads deserve extra care: require `Content-Length`, enforce the cap, stream
+in fixed chunks, unlink partial files, and keep the feature behind `--upload`.
 
 ## Security
 

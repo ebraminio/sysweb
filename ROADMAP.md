@@ -10,31 +10,42 @@ Legend: ✅ done · 🚧 next · 🗺️ planned · 🔬 research
 
 ## M0 — Blocking, syscall-first server ✅
 
-The current release.
+The current release (milestone 0.5).
 
 - [x] `#![no_std]`, no `alloc`, no global allocator.
 - [x] Zero third-party dependencies.
-- [x] `Platform` trait with RAII `Listener`/`Stream`/`File`.
+- [x] `Platform` trait with RAII `Listener`/`Stream`/`File`/`Dir`.
 - [x] Linux x86_64 and aarch64 raw syscall backends
       (x86_64 runtime-tested; aarch64 cross-built and checked).
 - [x] Linux binary: static ELF, custom `_start`, no libc, no dynamic section.
 - [x] macOS arm64 raw BSD syscall backend.
 - [x] macOS binary: zero imported symbols; `libSystem` only as an ld64
       requirement.
-- [x] HTTP/1.0 and HTTP/1.1 request-line parsing for `GET`/`HEAD`.
+- [x] HTTP/1.0 and HTTP/1.1 request parsing for `GET`/`HEAD`/`PUT`.
+- [x] `Content-Length` and `Expect: 100-continue`; chunked bodies rejected.
 - [x] Static files, `index.html`, MIME table, 16 KiB streaming.
+- [x] Built-in directory index with metadata, breadcrumbs, sorting, and a
+      self-contained 64 KiB HTML/CSS/JS page.
+- [x] Opt-in raw `PUT` uploads, folder creation, `--replace`, 1 GiB cap, and
+      failed-upload cleanup.
+- [x] `301` from `/dir` to `/dir/`; `--no-index` mode.
+- [x] HTML escaping and URL encoding for listing entries; final-component
+      `O_NOFOLLOW`.
 - [x] Percent-decoding, dot-segment normalization, traversal rejection.
-- [x] 400/403/404/405/414/431/500/505 responses.
+- [x] 201/301/400/403/404/405/409/411/413/414/431/500/505 responses.
 - [x] `Content-Length`, `Content-Type`, `Server`, `Connection: close`.
-- [x] IPv4 bind, CLI (`--root`, `--port`, `--host`, `--backlog`, `--quiet`).
-- [x] Unit tests + real-binary end-to-end test.
+- [x] IPv4 bind, CLI (`--root`, `--port`, `--host`, `--backlog`, `--upload`,
+      `--replace`, `--no-index`, `--quiet`).
+- [x] Unit tests + four real-binary end-to-end tests.
 - [x] CI workflow for Linux and macOS, including `cargo test --release` to
       catch LTO-only libcall bugs.
-- [x] Demonstrated: 33,392-byte macOS binary with `nm -u` empty; 15,800-byte
-      static Linux ELF with no dynamic section.
+- [x] Demonstrated: 66,480-byte macOS binary with `nm -u` empty; 43,032-byte
+      (x86_64) and 41,520-byte (aarch64) static Linux ELFs with no dynamic
+      section.
 
 **Known gaps:** single-threaded blocking, no timeouts, no keep-alive, no `Date`,
-no `Range`, symlinks followed, macOS Intel unsupported, no Windows backend.
+no `Range`, no auth/delete/rename, intermediate symlink escape, macOS Intel
+unsupported, no Windows backend.
 
 ---
 
@@ -51,13 +62,28 @@ Make the blocking server pleasant and safe enough to run on a LAN.
 - [ ] `If-Modified-Since` / `If-None-Match` → 304.
 - [ ] `Range: bytes=...` with a single range → 206 + `Content-Range`; reject
       multi-range with 416 or ignore per policy.
-- [ ] `301` redirect from `/dir` to `/dir/` when the target is a directory.
 - [ ] `Keep-Alive` with a bounded request count and idle timeout.
 - [ ] `HEAD` for every error path (already done, keep under test).
 - [ ] Optional `OPTIONS`/`TRACE` policy: 405 with `Allow` is fine.
+- [ ] Optional multipart/form-data compatibility for clients that cannot send a
+      raw `PUT` body.
+- [ ] Listing pagination or chunked rendering for directories whose page
+      exceeds 64 KiB.
 
-### Robustness
+### Parity and hardening
 
+- [ ] Opt-in `--delete` with the same path containment checks and explicit
+      confirmation in the UI.
+- [ ] Opt-in rename/move with two-step containment checks.
+- [ ] `--userpass=user:pass` Basic auth (base64 decode on the stack, constant
+      time compare) like pad.js.
+- [ ] CORS / cross-origin isolation headers, off by default.
+- [ ] Optional path prefix and inactivity timeout.
+- [ ] Port fallback when the requested port is busy (pad.js behavior).
+- [ ] Atomic uploads: write a temp file, fsync, rename; keep `--replace`
+      non-destructive on failure.
+- [ ] Upload quota / max total bytes, and a dedicated upload directory option.
+- [ ] CSRF/Origin/Host checks before any write endpoint.
 - [ ] Read/write timeouts (`SO_RCVTIMEO` / `SO_SNDTIMEO`) before the async
       reactor lands.
 - [ ] Graceful shutdown on `SIGINT`/`SIGTERM` (signal syscalls; no libc).
@@ -109,10 +135,12 @@ executor and no allocation.
 ### Server state machine
 
 - [ ] Fixed `Connection` slots (`MAX_CONNECTIONS`, no heap).
-- [ ] States: `ReadingHeaders → Opening → WritingHeaders → Streaming → Closing`.
+- [ ] States: `ReadingHeaders → Opening → WritingHeaders → Streaming`,
+      plus `ReadingBody → WritingFile` for uploads, `Listing`, and `Closing`.
 - [ ] Per-slot deadlines for header read, idle keep-alive, and write progress.
 - [ ] Bounded accept loop per event to avoid starving existing connections.
-- [ ] Backpressure: stop reading when the response socket is not writable.
+- [ ] Backpressure: stop reading when the response socket is not writable;
+      apply the same discipline to upload bodies and disk writes.
 - [ ] Keep-alive integrated into the state machine.
 - [ ] `Connection: close` remains the default on errors.
 
@@ -120,7 +148,8 @@ executor and no allocation.
 
 - [ ] Benchmark 1/10/100/1,000/10,000 concurrent connections.
 - [ ] Confirm RSS is flat in the number of connections (fixed slots).
-- [ ] Load test with slow clients and partial headers (slowloris resistance).
+- [ ] Load test with slow clients, partial headers, and slow uploads
+      (slowloris resistance).
 - [ ] No `std`, no `alloc`, still zero third-party deps.
 - [ ] CI runs the async e2e suite on Linux and macOS.
 
