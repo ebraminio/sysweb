@@ -17,7 +17,9 @@ runtime, no heap, and, on Linux, no libc at all.
   a `libSystem` load command for any dynamic executable, so it is linked, but
   the program never calls into it;
 - `unsafe` is confined to the syscall ABI, the entry points, and the few `mem*`
-  shims.
+  shims;
+- **binary size is a first-class design goal** — release budgets are checked in
+  CI, not just measured after the fact.
 
 > Status: **milestone 0.5** — blocking, single-threaded. Static files,
 > built-in directory indexes, opt-in raw `PUT` uploads, classic
@@ -65,6 +67,10 @@ Linux is the primary target for the libc-free goal. macOS uses Apple's
 undocumented raw syscall ABI; Apple does not promise stability across releases.
 The `libSystem` load command is mandatory for ld64, but `nm -u` on the release
 binary is empty.
+
+Windows is planned as the CRT-free IOCP backend **after** the async reactor, so
+the `Platform`/`Reactor` shape is settled first. A no-CRT entry-point/link spike
+can happen earlier, but there will not be a blocking Windows backend.
 
 ### Latest-API policy
 
@@ -232,11 +238,11 @@ $ nm -u target/release/syswebd
 
 Current stripped sizes from this workspace:
 
-| Target | Size |
-| --- | ---: |
-| macOS arm64 | 83,024 B |
-| Linux x86_64 | 56,680 B |
-| Linux aarch64 | 55,088 B |
+| Target | Size | Budget |
+| --- | ---: | ---: |
+| macOS arm64 | 83,024 B | 96 KiB |
+| Linux x86_64 | 57,128 B | 64 KiB |
+| Linux aarch64 | 55,312 B | 64 KiB |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
 workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and
@@ -248,11 +254,15 @@ The same checks are available locally and are used by CI:
 
 ```sh
 ./scripts/check-binary.sh target/release/syswebd
+./scripts/check-size.sh target/release/syswebd
 ./scripts/check-no-deps.sh
 ```
 
 `check-binary.sh` verifies the static/EXEC/no-interpreter/no-`NEEDED` shape on
 Linux and the single-`libSystem`/no-undefined-symbols shape on macOS.
+`check-size.sh` enforces the per-platform budget above in CI and in the release
+workflow. Binary size is treated as a design constraint: new features must fit
+the budget or the budget must be changed deliberately.
 
 Fuzzing and adversarial checks:
 
@@ -330,8 +340,14 @@ linker setup, and the async design.
 
 This is a milestone, not a hardened internet-facing server:
 
-- single-threaded and blocking; one slow client stalls everyone;
+- single-threaded and blocking; one slow client stalls everyone. That is
+  acceptable for this milestone: a stalled service is preferable to exiting.
+  Transient `accept` failures (for example `EMFILE` or `ECONNABORTED`) retry
+  after a 100 ms backoff; fatal listener errors still terminate the process;
 - no read/write timeouts yet (slowloris is possible, including slow uploads);
+- stress/load testing is deliberately scheduled after the async reactor. The
+  current suites target crashes, resets, containment, and liveness, not
+  throughput or latency under concurrency;
 - `Connection: close` only; no keep-alive or pipelining;
 - uploads are off by default, capped at 1 GiB, and have no auth or quota;
 - classic form posts upload one file per request; `filename*` (RFC 5987) and

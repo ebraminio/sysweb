@@ -50,13 +50,17 @@ The current release (milestone 0.5).
       by CI.
 - [x] Per-commit GitHub Releases for Linux x86_64/aarch64 and macOS arm64,
       with tarballs and SHA-256 checksums.
+- [x] Transient `accept` failures retry with a 100 ms backoff instead of
+      exiting; a stalled service is acceptable, a permanent exit is not.
+- [x] Enforced binary-size budgets: 96 KiB macOS arm64, 64 KiB per Linux
+      target.
 - [x] `cargo-fuzz` targets for HTTP/path/multipart plus a black-box
       containment/hang/crash test in `tests/security.rs`.
 - [x] Default-port fallback when the port is implicit and 8080 is busy.
 - [x] Runtime-tested on a Raspberry Pi 5 (kernel 6.12 aarch64): listings,
       uploads, forms, `sendfile`, symlink denial, aborted transfers.
-- [x] Demonstrated: 83,024-byte macOS binary with `nm -u` empty; 56,680-byte
-      (x86_64) and 55,088-byte (aarch64) static Linux ELFs with no dynamic
+- [x] Demonstrated: 83,024-byte macOS binary with `nm -u` empty; 57,128-byte
+      (x86_64) and 55,312-byte (aarch64) static Linux ELFs with no dynamic
       section.
 
 **Known gaps:** single-threaded blocking, no timeouts, no keep-alive, no `Date`,
@@ -158,7 +162,10 @@ executor and no allocation.
 
 ### Performance and validation
 
-- [ ] Benchmark 1/10/100/1,000/10,000 concurrent connections.
+- [ ] **After the reactor:** stress/load testing. Run 1/10/100/1,000/10,000
+      concurrent connections, partial headers, slow uploads, disconnects, and
+      fd pressure. The acceptance rule is liveness, not latency: the process
+      may stall, but must not exit permanently.
 - [ ] Confirm RSS is flat in the number of connections (fixed slots).
 - [ ] Load test with slow clients, partial headers, and slow uploads
       (slowloris resistance).
@@ -168,6 +175,11 @@ executor and no allocation.
 ---
 
 ## M3 — Windows CRT-free backend 🗺️
+
+**Ordering:** after M2. The Windows backend is IOCP, not a blocking
+implementation that would be rewritten by the reactor. A small no-CRT
+link/entry-point spike can be done earlier on the `192.168.1.50` machine, but
+the real backend lands against the async `Reactor` trait.
 
 - [ ] `#![no_main]`, export `mainCRTStartup`, `/NODEFAULTLIB`.
 - [ ] Provide `mem*` shims and the panic handler for the MSVC target.
@@ -247,7 +259,9 @@ Every milestone must preserve:
 4. **OS-native async.** No fake async over threads; no hidden thread pools.
 5. **Measurable claims.** Every “no libc”/“CRT-free” claim comes with a command
    (`nm -u`, `readelf -d`, `otool -L`, `dumpbin /dependents`) and CI output.
-6. **Small binaries.** Regressions are visible in CI size output.
+6. **Small binaries.** Release binaries stay within the checked budgets
+   (96 KiB macOS arm64, 64 KiB per Linux target); growth is a deliberate
+   decision, not a silent regression.
 
 ## Open questions
 

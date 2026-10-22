@@ -105,6 +105,7 @@ and must never observe outside-file content. For release checks, run:
 
 ```sh
 ./scripts/check-binary.sh target/release/syswebd
+./scripts/check-size.sh target/release/syswebd
 ./scripts/check-no-deps.sh
 ```
 

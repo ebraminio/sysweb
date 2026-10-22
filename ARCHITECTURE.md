@@ -87,6 +87,7 @@ pub trait Platform {
     fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
     fn read(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
     fn write_all(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<()>;
+    fn sleep_ms(&mut self, ms: u64);
 
     fn open(&mut self, path: &[u8]) -> Result<Self::File>;
     fn file_info(&mut self, file: &Self::File) -> Result<FileInfo>;
@@ -129,6 +130,15 @@ Design notes:
   without rejecting a symlinked system prefix such as macOS `/var`.
 - **Normalized errors.** `Error` hides errno differences (`EAGAIN` is 11 on
   Linux and 35 on macOS, `ECONNRESET` is 104 vs 54, etc.).
+- **Liveness over throughput.** A stalled blocking server is acceptable; a
+  permanent exit on transient pressure is not. `accept` retries
+  `EMFILE`/`ENFILE`, `ECONNABORTED`, `ECONNRESET`, and `EAGAIN` after a 100 ms
+  `sleep_ms` (Linux `nanosleep`, macOS `poll(NULL, 0, ms)`) instead of exiting.
+  Fatal listener errors still terminate; there is no supervisor yet.
+- **Size budget.** Binary size is a design constraint, not an afterthought.
+  CI and the release workflow enforce 96 KiB on macOS arm64 and 64 KiB on each
+  Linux target via `scripts/check-size.sh`; changing a budget is a deliberate
+  change, not a silent regression.
 
 ## Linux backend
 
