@@ -115,8 +115,8 @@ unsafe extern "C" {
     fn c_send(fd: i32, buf: *const u8, len: usize, flags: i32) -> isize;
     #[link_name = "close"]
     fn c_close(fd: i32) -> i32;
-    #[link_name = "poll"]
-    fn c_poll(fds: *mut u8, nfds: u32, timeout: i32) -> i32;
+    #[link_name = "nanosleep"]
+    fn c_nanosleep(request: *const Timespec, remaining: *mut Timespec) -> i32;
     #[link_name = "fdopendir"]
     fn c_fdopendir(fd: i32) -> *mut u8;
     #[link_name = "readdir"]
@@ -168,10 +168,12 @@ fn map_errno(errno: i32) -> Error {
 }
 
 pub fn sleep_ms(ms: u64) -> Result<()> {
-    let timeout = core::cmp::min(ms, i32::MAX as u64) as i32;
+    let request = Timespec {
+        tv_sec: (ms / 1000) as i64,
+        tv_nsec: ((ms % 1000) * 1_000_000) as i64,
+    };
     loop {
-        let result = unsafe { c_poll(null_mut(), 0, timeout) };
-        if result >= 0 {
+        if unsafe { c_nanosleep(&request, null_mut()) } == 0 {
             return Ok(());
         }
         match last_error() {
