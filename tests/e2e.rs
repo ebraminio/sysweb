@@ -592,11 +592,12 @@ fn multipart_forms_work_for_old_browsers() {
     assert!(!page.contains("classList"));
     assert!(!page.contains("fetch("));
     assert!(!page.contains("=>"));
-    // Legacy engines get a hard-coded light theme; modern rules still use
-    // variables and the dark media query.
+    // Legacy engines get a hard-coded light theme; modern rules use one
+    // dark media query at the end of the stylesheet.
     assert!(page.contains("background: #f5f6f8"));
-    assert!(page.contains("var(--bg)"));
+    assert!(page.contains("background: #101216"));
     assert!(page.contains("prefers-color-scheme: dark"));
+    assert!(!page.contains("var(--"));
 
     // Classic form post to a directory: filename comes from the part.
     let body = multipart_body("----syswebForm", "old.txt", b"hello from a form");

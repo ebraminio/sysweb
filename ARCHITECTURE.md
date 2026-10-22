@@ -356,9 +356,9 @@ parser:
   API or modern APIs are absent, the form remains and still works. The inline
   JS is intentionally ES3-style and feature-detected: no `Promise`,
   `querySelectorAll`, `dataset`, `classList`, `fetch`, arrow functions, or
-  `const`/`let`. The CSS has a hard-coded light fallback before the custom
-  properties, so old engines still get readable colors; modern browsers keep
-  the `prefers-color-scheme` dark palette.
+  `const`/`let`. The CSS has hard-coded light base rules and a single
+  `prefers-color-scheme: dark` override block at the end; there are no custom
+  properties, so old engines still get readable colors.
 
 `POST` is only accepted when `--upload` is set; non-multipart posts get 415, a
 missing file part 400, and conflicts follow the same `--replace` rules as PUT.
