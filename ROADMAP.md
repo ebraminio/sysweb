@@ -48,6 +48,8 @@ The current release (milestone 0.5).
       plus a no-JS form in the directory index.
 - [x] Reusable `scripts/check-binary.sh` and `scripts/check-no-deps.sh` used
       by CI.
+- [x] Per-commit GitHub Releases for Linux x86_64/aarch64 and macOS arm64,
+      with tarballs and SHA-256 checksums.
 - [x] `cargo-fuzz` targets for HTTP/path/multipart plus a black-box
       containment/hang/crash test in `tests/security.rs`.
 - [x] Default-port fallback when the port is implicit and 8080 is busy.
@@ -219,7 +221,9 @@ Acceptance: a `.exe` that serves the same test suite, imports no
 ## M6 — Project and ecosystem 🗺️
 
 - [ ] Publish crates (`sysweb` library, `syswebd` binary).
-- [ ] Reproducible release binaries for Linux x86_64/aarch64 and macOS arm64.
+- [ ] Bit-for-bit reproducible release binaries (the per-commit release
+      workflow builds the three supported targets but does not yet verify
+      reproducibility).
 - [ ] `Dockerfile` using `FROM scratch` for the static Linux binary.
 - [ ] Man page and shell completions.
 - [ ] Broader OSS-Fuzz onboarding and corpus maintenance.

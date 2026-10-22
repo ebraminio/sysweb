@@ -206,7 +206,7 @@ On macOS, after `cargo build --release`:
 
 ```console
 $ ls -l target/release/syswebd
--rwxr-xr-x  66480  target/release/syswebd
+-rwxr-xr-x  83024  target/release/syswebd
 
 $ otool -L target/release/syswebd
 target/release/syswebd:
@@ -238,10 +238,10 @@ Current stripped sizes from this workspace:
 | Linux x86_64 | 56,232 B |
 | Linux aarch64 | 54,664 B |
 
-CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). Linux runtime
-tests run there; both Linux targets
-were cross-built locally, and the aarch64 build was also exercised on a
-Raspberry Pi 5 (kernel 6.12): directory listings, `openat2`/`statx`, `sendfile`, raw `PUT`,
+CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
+workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and
+`macos-latest`. The aarch64 build was also exercised on a Raspberry Pi 5
+(kernel 6.12): directory listings, `openat2`/`statx`, `sendfile`, raw `PUT`,
 classic multipart forms, symlink denial, and aborted transfers.
 
 The same checks are available locally and are used by CI:
@@ -262,6 +262,39 @@ Fuzzing and adversarial checks:
   malformed-path, and hundreds of randomized requests, asserting bounded
   statuses, timeouts, crashes, and no outside-file leakage.
 - CI runs a nightly `cargo fuzz` smoke job and the black-box security test.
+
+## Per-commit releases
+
+Every push to `main` (and manual dispatches) creates a GitHub Release for that
+exact commit:
+
+- tag: `build-<short-sha>`
+- title: `Build <short-sha>`
+- assets: `sysweb-<short-sha>-<platform>.tar.gz`
+- checksum: `<asset>.sha256`
+
+Supported release targets:
+
+| Platform | Runner | Binary |
+| --- | --- | --- |
+| `linux-x86_64` | `ubuntu-latest` | static ELF |
+| `linux-aarch64` | `ubuntu-24.04-arm` | static ELF |
+| `macos-arm64` | `macos-latest` | Mach-O, `libSystem` load command only |
+
+Windows and Intel macOS are not released yet because those backends are not
+implemented. Each archive contains `syswebd`, `README.md`, and `LICENSE`.
+Releases are marked `--latest=false`, so per-commit builds do not replace a
+future stable latest release.
+
+The workflow is [.github/workflows/release.yml](.github/workflows/release.yml).
+To verify a downloaded artifact:
+
+```sh
+shasum -a 256 -c sysweb-<short>-linux-x86_64.tar.gz.sha256   # macOS
+sha256sum -c sysweb-<short>-linux-x86_64.tar.gz.sha256       # Linux
+tar -xzf sysweb-<short>-linux-x86_64.tar.gz
+./sysweb-<short>-linux-x86_64/syswebd --help
+```
 
 ## How it works
 
