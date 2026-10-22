@@ -60,16 +60,22 @@ jobs:
         with:
           tool: cargo-fuzz
 
+      # install-action ships a musl-static cargo-fuzz, and cargo-fuzz defaults
+      # --target to its own build triple, not the runner's. Pin the gnu host
+      # explicitly; musl is not installed and cannot take a sanitizer.
       - name: Build fuzzers
-        run: cargo fuzz build
+        run: |
+          host="$(rustc -vV | sed -n 's|host: ||p')"
+          cargo fuzz build --target "$host"
 
       - name: Run fuzz targets
         run: |
+          host="$(rustc -vV | sed -n 's|host: ||p')"
           for target in http path multipart; do
             echo "::group::fuzz $target"
             mkdir -p "fuzz/corpus/$target"
             cp "fuzz/seeds/$target/"* "fuzz/corpus/$target/"
-            cargo fuzz run "$target" "fuzz/corpus/$target" -- -timeout=5 -max_total_time=20 -rss_limit_mb=2048
+            cargo fuzz run --target "$host" "$target" "fuzz/corpus/$target" -- -timeout=5 -max_total_time=20 -rss_limit_mb=2048
             echo "::endgroup::"
           done
 
