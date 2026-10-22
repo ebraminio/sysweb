@@ -52,5 +52,9 @@ Notes from making it load:
   So `/FIXED` is not a toolchain limitation. The Rust spike keeps the default
   relocation section because it is more robust; fixed-base is optional.
 
-The real Windows backend remains the IOCP/async backend. This spike only
-de-risks the entry point, linker flags, and import table.
+For a single-section MSVC layout, the battery-warn recipe can be extended with
+`/FIXED /DYNAMICBASE:NO /MERGE:.rdata=.text` once the image has no writable
+global state. This spike defaults to a relocatable image; it has no `static`
+items, so the read-only sections are mergeable. The real Windows backend
+remains the IOCP/async backend; this spike only de-risks the entry point, linker
+flags, and import table.

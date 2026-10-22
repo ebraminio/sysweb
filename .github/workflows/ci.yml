@@ -30,6 +30,9 @@ jobs:
       - name: Dependency policy
         run: ./scripts/check-no-deps.sh
 
+      - name: No service-side globals
+        run: ./scripts/check-no-globals.sh
+
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 

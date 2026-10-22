@@ -427,6 +427,12 @@ There is no `alloc` crate dependency and no `#[global_allocator]`. If a future
 change introduces an allocation, the crate stops compiling for a no-std target,
 which is the desired failure mode.
 
+Rust does have `static`, `static mut`, function-local `static`, and
+`thread_local!`; the service sources deliberately have none. `const` values and
+`&'static` string literals are fine. `scripts/check-no-globals.sh` rejects
+service-side globals so state stays in caller buffers and writable sections do
+not appear.
+
 On macOS, `fdopendir`/`readdir` may allocate inside libSystem; that allocator
 is not linked into `syswebd`, and it is the only known hidden allocation on the
 macOS path.

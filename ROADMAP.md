@@ -262,7 +262,10 @@ Every milestone must preserve:
 4. **OS-native async.** No fake async over threads; no hidden thread pools.
 5. **Measurable claims.** Every “no libc”/“CRT-free” claim comes with a command
    (`nm -u`, `readelf -d`, `otool -L`, `dumpbin /dependents`) and CI output.
-6. **Small binaries.** Release binaries stay within the checked budgets
+6. **No writable global state.** Service-side `static`/`static mut`/
+   `thread_local!` items are rejected; the fixed-buffer design passes state
+   explicitly. This also keeps read-only sections mergeable into `.text`.
+7. **Small binaries.** Release binaries stay within the checked budgets
    (112 KiB macOS arm64, 64 KiB x86_64, 72 KiB aarch64); growth is a deliberate
    decision, not a silent regression.
 

@@ -12,6 +12,8 @@ runtime, no heap, and, on Linux, no libc at all.
 - no heap in our code — no `alloc`, no global allocator, all buffers are
   fixed-size; macOS directory iteration may allocate inside libSystem;
 - no third-party crates — `cargo tree` shows exactly one node;
+- no writable global state — service-side `static`/`static mut`/
+  `thread_local!` items are rejected by `scripts/check-no-globals.sh`;
 - on Linux — **no libc at all**: a static ELF, hand-written `_start`, raw
   syscalls, no dynamic section;
 - on macOS — the **stable libSystem ABI**, not private syscall numbers or
@@ -265,6 +267,7 @@ The same checks are available locally and are used by CI:
 ./scripts/check-binary.sh target/release/syswebd
 ./scripts/check-size.sh target/release/syswebd
 ./scripts/check-no-deps.sh
+./scripts/check-no-globals.sh
 ```
 
 `check-binary.sh` verifies the static/EXEC/no-interpreter/no-`NEEDED` shape on
