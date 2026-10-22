@@ -21,7 +21,7 @@ impl Sink for NullSink {
 
 fuzz_target!(|data: &[u8]| {
     let Ok(mut parser) =
-        Parser::new(b"multipart/form-data; boundary=fuzz", 1 << 20)
+        Parser::new(b"multipart/form-data; boundary=fuzz")
     else {
         return;
     };
