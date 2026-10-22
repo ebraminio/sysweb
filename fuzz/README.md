@@ -33,7 +33,10 @@ before fuzzing so the committed seeds stay pristine.
 ## CI
 
 The `fuzz-smoke` job in `.github/workflows/ci.yml` builds all three targets on
-nightly and runs each for 20 seconds with a 5-second per-input timeout. The
+nightly and runs each for 20 seconds with a 5-second per-input timeout. It pins
+`--target` to the triple reported by `rustc -vV` because the `install-action`
+`cargo-fuzz` binary is musl-static and would otherwise default to
+`x86_64-unknown-linux-musl`, which is not installed and cannot take ASan. The
 normal `cargo test` job also runs `tests/security.rs`, which sends hundreds of
 deterministic traversal, symlink, malformed, and randomized requests to the real
 binary and checks for status bounds, timeouts, crashes, and secret leakage.
