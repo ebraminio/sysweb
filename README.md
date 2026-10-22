@@ -20,9 +20,10 @@ runtime, no heap, and, on Linux, no libc at all.
   shims.
 
 > Status: **milestone 0.5** — blocking, single-threaded. Static files,
-> built-in directory indexes, opt-in raw `PUT` uploads and folder creation,
-> HTTP/1.0 and 1.1 `GET`/`HEAD`, `Connection: close`. The async reactor is the
-> next milestone; see [ROADMAP.md](ROADMAP.md).
+> built-in directory indexes, opt-in raw `PUT` uploads, classic
+> `multipart/form-data` form uploads for old/no-JavaScript browsers, folder
+> creation, `sendfile` file serving, HTTP/1.0 and 1.1, `Connection: close`.
+> The async reactor is the next milestone; see [ROADMAP.md](ROADMAP.md).
 
 ## Why
 
@@ -76,6 +77,8 @@ exist, the newest one wins:
   milestone targets `kqueue`.
 - **Windows 10 1809+**: IOCP with `GetQueuedCompletionStatusEx` and
   `CreateFile2`; no `WSAPoll` fallback and no CRT.
+- File serving uses `sendfile` (Linux 40/71, macOS 337); there is no
+  read/write-loop fallback.
 
 The document root is opened once and all paths are relative to that directory
 fd. Symlink denial therefore applies *beneath* the root, while the root path
@@ -109,6 +112,9 @@ Then:
 # upload (raw request body; no multipart needed)
 curl -T ./report.pdf http://127.0.0.1:8080/files/report.pdf
 
+# classic form upload (works from old browsers / curl -F)
+curl -F "file=@./report.pdf" http://127.0.0.1:8080/files/
+
 # create a directory (trailing slash matters)
 curl -X PUT http://127.0.0.1:8080/files/notes/
 
@@ -117,10 +123,15 @@ curl -X PUT http://127.0.0.1:8080/files/notes/
 curl -T ./new.txt http://127.0.0.1:8080/files/report.txt
 ```
 
+The built-in index also contains a plain HTML form
+(`method=post enctype=multipart/form-data`) inside `<noscript>`, so a browser
+with JavaScript disabled can upload one file. Classic form posts take the
+filename from the part; a post to `/files/fixed.txt` uses the URL path instead.
+
 The server answers `201 Created` on uploads and folder creation, `409 Conflict`
 when a file exists without `--replace`, `411 Length Required` when a file
-upload has no `Content-Length`, and `413 Payload Too Large` above the 1 GiB
-limit.
+upload has no `Content-Length`, `415 Unsupported Media Type` for a non-multipart
+form post, and `413 Payload Too Large` above the 1 GiB limit.
 
 ## CLI
 
@@ -155,6 +166,11 @@ it; this server has no TLS, authentication, or rate limiting.
   creation, inlined into a fixed 64 KiB buffer;
 - raw-body `PUT` uploads with `Content-Length`, `Expect: 100-continue`, a 1 GiB
   cap, exact streaming (no heap), and cleanup of failed partial files;
+- classic `multipart/form-data` `POST` uploads for old browsers, parsed by a
+  streaming state machine with a 32 KiB buffer and no whole-body buffering;
+  the no-JS form is part of the index page;
+- file responses use `sendfile`, so the file is never copied through a
+  16 KiB userspace loop;
 - `PUT /dir/` creates one directory; `--replace` opts into overwriting;
 - `--no-index` disables generated listings (403 for directories without
   `index.html`);
@@ -203,12 +219,25 @@ Current stripped sizes from this workspace:
 
 | Target | Size |
 | --- | ---: |
-| macOS arm64 | 66,480 B |
-| Linux x86_64 | 43,408 B |
-| Linux aarch64 | 41,904 B |
+| macOS arm64 | 66,496 B |
+| Linux x86_64 | 50,920 B |
+| Linux aarch64 | 49,128 B |
 
-Linux runtime tests run in the CI workflow; both Linux targets were cross-built
-and statically verified locally with `ld.lld`, `file`, `readelf`, and `nm`.
+CI runs on `ubuntu-latest` and `macos-26` (Apple Silicon), the current
+`macos-latest` arm64 image. Linux runtime tests run there; both Linux targets
+were cross-built locally, and the aarch64 build was also exercised on a
+Raspberry Pi 5 (kernel 6.12): directory listings, `openat2`/`statx`, `sendfile`, raw `PUT`,
+classic multipart forms, symlink denial, and aborted transfers.
+
+The same checks are available locally and are used by CI:
+
+```sh
+./scripts/check-binary.sh target/release/syswebd
+./scripts/check-no-deps.sh
+```
+
+`check-binary.sh` verifies the static/EXEC/no-interpreter/no-`NEEDED` shape on
+Linux and the single-`libSystem`/no-undefined-symbols shape on macOS.
 
 ## How it works
 
@@ -248,6 +277,10 @@ This is a milestone, not a hardened internet-facing server:
 - no read/write timeouts yet (slowloris is possible, including slow uploads);
 - `Connection: close` only; no keep-alive or pipelining;
 - uploads are off by default, capped at 1 GiB, and have no auth or quota;
+- classic form posts upload one file per request; `filename*` (RFC 5987) and
+  multi-file form fields are not parsed yet;
+- the old-browser page is functional but the CSS assumes a reasonably modern
+  layout engine;
 - no delete, rename, Range, `ETag`, `Last-Modified`, or `Date` yet;
 - no CORS, cross-origin isolation, prefix, or inactivity timeout yet;
 - all symlinks beneath the root are denied; the root path itself may be a
@@ -270,7 +303,8 @@ The next milestone is the async reactor abstraction:
 - timeouts, keep-alive, connection limits;
 - Windows CRT-free entry and build recipe;
 - Range/conditional requests, delete/rename, auth, CORS, prefix;
-- `sendfile`/`splice`/`io_uring` zero-copy paths;
+- `splice`/io_uring zero-copy paths beyond `sendfile`;
+- multi-file multipart forms and `filename*` support;
 - fuzzing and a larger CI matrix.
 
 The full plan is in [ROADMAP.md](ROADMAP.md).

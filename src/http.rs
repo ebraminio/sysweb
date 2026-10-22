@@ -8,6 +8,7 @@ pub enum Method {
     Get,
     Head,
     Put,
+    Post,
 }
 
 impl Method {
@@ -16,6 +17,7 @@ impl Method {
             Method::Get => b"GET",
             Method::Head => b"HEAD",
             Method::Put => b"PUT",
+            Method::Post => b"POST",
         }
     }
 }
@@ -34,6 +36,7 @@ pub struct Request<'a> {
     pub target: &'a [u8],
     pub version: Version,
     pub content_length: Option<u64>,
+    pub content_type: Option<&'a [u8]>,
     pub expect_continue: bool,
     /// Index just past `\r\n\r\n`; body bytes may already follow in the buffer.
     pub body_offset: usize,
@@ -79,6 +82,7 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
         b"GET" => Method::Get,
         b"HEAD" => Method::Head,
         b"PUT" => Method::Put,
+        b"POST" => Method::Post,
         _ => return Err(ParseError::UnsupportedMethod),
     };
     let version = match version {
@@ -93,6 +97,7 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
     }
 
     let mut content_length = None;
+    let mut content_type = None;
     let mut expect_continue = false;
     if line_end + 2 <= head.len() {
         for header_line in head[line_end + 2..].split(|&b| b == b'\n') {
@@ -117,6 +122,8 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
             } else if name.eq_ignore_ascii_case(b"transfer-encoding") {
                 // Chunked request bodies are not implemented; never guess.
                 return Err(ParseError::Malformed);
+            } else if name.eq_ignore_ascii_case(b"content-type") {
+                content_type = Some(value);
             } else if name.eq_ignore_ascii_case(b"expect") {
                 expect_continue = value.eq_ignore_ascii_case(b"100-continue");
             }
@@ -128,6 +135,7 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
         target,
         version,
         content_length,
+        content_type,
         expect_continue,
         body_offset: end,
     })
@@ -176,6 +184,7 @@ pub enum Status {
     Forbidden,
     NotFound,
     MethodNotAllowed,
+    UnsupportedMediaType,
     Conflict,
     LengthRequired,
     PayloadTooLarge,
@@ -195,6 +204,7 @@ impl Status {
             Status::Forbidden => 403,
             Status::NotFound => 404,
             Status::MethodNotAllowed => 405,
+            Status::UnsupportedMediaType => 415,
             Status::Conflict => 409,
             Status::LengthRequired => 411,
             Status::PayloadTooLarge => 413,
@@ -214,6 +224,7 @@ impl Status {
             Status::Forbidden => b"Forbidden",
             Status::NotFound => b"Not Found",
             Status::MethodNotAllowed => b"Method Not Allowed",
+            Status::UnsupportedMediaType => b"Unsupported Media Type",
             Status::Conflict => b"Conflict",
             Status::LengthRequired => b"Length Required",
             Status::PayloadTooLarge => b"Payload Too Large",
@@ -232,6 +243,7 @@ impl Status {
             Status::Forbidden => b"403 Forbidden\n",
             Status::NotFound => b"404 Not Found\n",
             Status::MethodNotAllowed => b"405 Method Not Allowed\n",
+            Status::UnsupportedMediaType => b"415 Unsupported Media Type\n",
             Status::Conflict => b"409 Conflict\n",
             Status::LengthRequired => b"411 Length Required\n",
             Status::PayloadTooLarge => b"413 Payload Too Large\n",
@@ -261,6 +273,7 @@ mod tests {
         assert_eq!(r.target, b"/index.html");
         assert_eq!(r.version, Version::Http11);
         assert_eq!(r.content_length, None);
+        assert_eq!(r.content_type, None);
         assert_eq!(r.body_offset, 37);
 
         let r = parse(b"HEAD / HTTP/1.0\r\n\r\n").unwrap();
@@ -270,11 +283,11 @@ mod tests {
 
     #[test]
     fn parses_put_headers_and_body_offset() {
-        let raw =
-            b"PUT /file.txt HTTP/1.1\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\nhello";
+        let raw = b"PUT /file.txt HTTP/1.1\r\nContent-Length: 5\r\nContent-Type: text/plain\r\nExpect: 100-continue\r\n\r\nhello";
         let r = parse(raw).unwrap();
         assert_eq!(r.method, Method::Put);
         assert_eq!(r.content_length, Some(5));
+        assert_eq!(r.content_type, Some(&b"text/plain"[..]));
         assert!(r.expect_continue);
         assert_eq!(&raw[r.body_offset..], b"hello");
     }
@@ -326,7 +339,7 @@ mod tests {
             Err(ParseError::UnsupportedMethod)
         );
         assert_eq!(
-            parse(b"POST / HTTP/1.1\r\n\r\n"),
+            parse(b"DELETE / HTTP/1.1\r\n\r\n"),
             Err(ParseError::UnsupportedMethod)
         );
         assert_eq!(
@@ -349,6 +362,7 @@ mod tests {
         assert_eq!(Status::NotFound.reason(), b"Not Found");
         assert_eq!(Status::NotFound.error_body(), b"404 Not Found\n");
         assert_eq!(Status::Conflict.code(), 409);
+        assert_eq!(Status::UnsupportedMediaType.code(), 415);
         assert_eq!(Status::LengthRequired.code(), 411);
         assert_eq!(Status::PayloadTooLarge.code(), 413);
         assert_eq!(Status::RequestHeaderFieldsTooLarge.code(), 431);

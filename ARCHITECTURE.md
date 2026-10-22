@@ -31,6 +31,7 @@ implemented:
 | Linux metadata | `statx` (`STATX_BASIC_STATS`) | Linux 4.11 |
 | Linux directories | `getdents64` | Linux 2.6.23 |
 | Linux async | `io_uring` (not epoll) | Linux 5.1+ (milestone 2) |
+| Linux zero-copy | `sendfile` | Linux 2.6 |
 | macOS open/containment | `O_NOFOLLOW_ANY` | macOS 11 |
 | macOS directories | `getdirentries64` | 64-bit-inode macOS |
 | macOS metadata | `fstatat` | 64-bit-inode macOS |
@@ -90,6 +91,13 @@ pub trait Platform {
     fn open(&mut self, path: &[u8]) -> Result<Self::File>;
     fn file_info(&mut self, file: &Self::File) -> Result<FileInfo>;
     fn read_file(&mut self, file: &mut Self::File, buf: &mut [u8]) -> Result<usize>;
+    fn send_file(
+        &mut self,
+        stream: &mut Self::Stream,
+        file: &mut Self::File,
+        offset: u64,
+        len: u64,
+    ) -> Result<u64>;
 
     fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir>;
     fn next_dir(&mut self, dir: &mut Self::Dir, name: &mut [u8])
@@ -138,6 +146,8 @@ Design notes:
 | `listen` | 50 | 201 |
 | `setsockopt` | 54 | 208 |
 | `getdents64` | 217 | 61 |
+| `sendfile` | 40 | 71 |
+| `rt_sigprocmask` | 14 | 135 |
 | `exit_group` | 231 | 94 |
 | `mkdirat` | 258 | 34 |
 | `unlinkat` | 263 | 35 |
@@ -254,8 +264,8 @@ the LTO binary, not just the debug build.
 
 Numbers used (Apple Silicon): `read` 3, `write` 4, `close` 6, `fstat` 189,
 `socket` 97, `accept` 30, `sendto` 133, `bind` 104, `listen` 106,
-`setsockopt` 105, `getdirentries64` 344, `openat` 463, `fstatat` 469,
-`unlinkat` 472, `mkdirat` 475, `exit` 1.
+`setsockopt` 105, `getdirentries64` 344, `sendfile` 337, `openat` 463,
+`fstatat` 469, `unlinkat` 472, `mkdirat` 475, `exit` 1.
 
 `AT_FDCWD` is `-2`, `sockaddr_in` begins with a length byte, `SOL_SOCKET` is
 `0xffff`, `SO_REUSEADDR` is `4`, and `MSG_NOSIGNAL` is `0x80000`. Directory
@@ -304,9 +314,11 @@ not implemented yet.
    against the root fd. `append_index` is applied only for directory URLs.
 5. `Platform::open` opens the relative path read-only with no-symlink
    resolution. `file_info` gets size, mode, and mtime.
-6. A regular file streams in 16 KiB chunks. `HEAD` sends only the header. The
+6. A regular file is sent with `sendfile`. `HEAD` sends only the header. The
    loop stops after exactly `Content-Length` bytes, so a growing file cannot
-   overrun the advertised length.
+   overrun the advertised length. Linux blocks `SIGPIPE` process-wide; macOS
+   sets `SO_NOSIGPIPE` on every accepted socket, so a client disconnect yields
+   `EPIPE` instead of killing the server.
 7. A directory URL without a trailing slash gets a 301 to the slashed form. A
    directory with `/` gets `index.html` if it exists; otherwise the built-in
    index is rendered, unless `--no-index` is set (403).
@@ -321,6 +333,30 @@ not implemented yet.
 The HTTP, path, MIME, config, and listing modules are exercised by unit tests
 with `std` enabled; the library itself is `no_std` whenever it is not compiled
 as a test target.
+
+## Classic multipart form compatibility
+
+Raw `PUT` is the primary upload path, but old browsers and no-JavaScript forms
+need `multipart/form-data`. `src/multipart.rs` implements a bounded streaming
+parser:
+
+- one 32 KiB buffer plus a boundary-sized tail; the body is never buffered
+  whole;
+- quote-aware parsing of `Content-Type: ...; boundary=...` and
+  `Content-Disposition: ...; filename=...`;
+- Windows `C:\fakepath\name` paths are reduced to a basename; NUL, controls,
+  `/`, `\`, `.` and `..` are rejected; names are capped at 255 bytes;
+- non-file fields are streamed and discarded; exactly one file part is
+  accepted per request (the classic form fallback has one input);
+- file bytes are handed to the `Sink` as they are confirmed, so the 1 GiB cap
+  is enforced without allocating;
+- a failed or truncated part is unlinked by the sink;
+- the directory page includes a `<noscript>` form with
+  `method=post enctype=multipart/form-data`; modern browsers keep using
+  `XMLHttpRequest`/`PUT` with progress.
+
+`POST` is only accepted when `--upload` is set; non-multipart posts get 415, a
+missing file part 400, and conflicts follow the same `--replace` rules as PUT.
 
 ## Directory index
 
@@ -346,7 +382,8 @@ works without special-casing.
 
 ## Uploads
 
-`PUT` is deliberately a raw-body protocol, not multipart:
+`PUT` is deliberately a raw-body protocol; classic forms use the separate
+bounded multipart `POST` path:
 
 - `Content-Length` is mandatory for file uploads (411 otherwise), and bodies
   above 1 GiB are rejected with 413 before reading;
@@ -363,7 +400,8 @@ works without special-casing.
 - uploads are disabled unless `--upload` is passed.
 
 The browser UI uses `XMLHttpRequest` with `PUT` for progress; `curl -T FILE URL`
-works unchanged. There is no multipart parser to bound, fuzz, or maintain.
+works unchanged. Raw `PUT` remains the primary upload path; the bounded
+multipart parser is only the compatibility path for classic form `POST`s.
 
 ## No-allocation strategy
 
@@ -371,12 +409,14 @@ works unchanged. There is no multipart parser to bound, fuzz, or maintain.
 | --- | ---: | --- |
 | request headers | 8 KiB | one connection |
 | normalized URL path | 1 KiB | one request |
-| filesystem path | 1.5 KiB | one request |
+| relative filesystem path | 1.5 KiB | one request |
 | response header | 4 KiB | one response |
 | redirect `Location` | ~3 KiB | one redirect |
 | directory entries | 4 KiB | one listing |
 | directory page | 64 KiB | one listing |
-| file chunk | 16 KiB | one file response/upload |
+| multipart parser | 32 KiB | one form upload |
+| multipart headers | 4 KiB (inside parser buffer) | one part |
+| upload/file chunk | 16 KiB | one PUT/upload read |
 | log line | 1.2 KiB | one log event |
 | config root | 256 B | process |
 
@@ -408,6 +448,11 @@ which is the desired failure mode.
   names cannot inject markup or `javascript:` links.
 - Response headers contain static strings, decimal numbers, and a
   percent-encoded `Location` path. Raw request bytes are never reflected.
+- `sendfile` runs with `SIGPIPE` blocked on Linux and `SO_NOSIGPIPE` on macOS,
+  so an aborted download cannot terminate the server.
+- Multipart filenames are reduced to a basename and reject separators,
+  controls, NUL, `.` and `..`; the parser never allocates or buffers a whole
+  body.
 
 Known unsafe edges: the raw syscall ABI itself, the `argv` dereference, the
 `mem*` shims, and Apple's undocumented syscall ABI. All are isolated and
@@ -497,10 +542,11 @@ in the server's stack or a static. Each event carries a slot token. There is no
 per-connection heap allocation and no unbounded queue. Idle/read/write timeouts
 come from the reactor wait timeout plus a per-slot deadline.
 
-The HTTP parser already returns a borrowed `Request<'a>`, and uploads are
-already a bounded read/write loop, so the async state machine can keep using
-the same code; only the I/O driver changes. Directory rendering stays a
-bounded in-memory step (64 KiB), so it does not need incremental state.
+The HTTP parser already returns a borrowed `Request<'a>`, uploads are a bounded
+read/write loop, and the multipart parser is already incremental, so the async
+state machine can keep using the same code; only the I/O driver changes.
+Directory rendering stays a bounded in-memory step (64 KiB), so it does not
+need incremental state.
 
 ## Windows plan (milestone 2)
 
@@ -531,17 +577,18 @@ several.
 
 - Unit tests for request parsing (including `Content-Length`/`Expect`), path
   normalization/joining, MIME, config, listing formatting, and `FixedBuf`.
-- Four end-to-end tests spawn the real binary over loopback and cover GET,
-  HEAD, binary bodies, large files, directory indexes, breadcrumbs/metadata,
-  HTML escaping, symlink denial, 301 redirects, 404/405/505/400/409/411/413,
-  `--no-index`, uploads, folder creation, `--replace`, missing length,
-  `Expect: 100-continue`, and traversal attempts.
+- Five end-to-end tests spawn the real binary over loopback and cover GET,
+  HEAD, binary bodies, `sendfile` for an 8 MiB file, directory indexes,
+  breadcrumbs/metadata, HTML escaping, symlink denial, 301 redirects,
+  404/405/505/400/409/411/413/415, `--no-index`, raw uploads, folder creation,
+  `--replace`, missing length, `Expect: 100-continue`, traversal attempts, and
+  classic multipart form uploads (including a 100 KiB chunked body).
 - CI runs `cargo test` and `cargo test --release` on Linux and macOS. The
   release run is mandatory because the `bzero`/LTO failure mode did not appear
   in debug builds.
-- Future: fuzz the parser, path normalizer, and listing escaper; property-test
-  the path invariant (`..` cannot survive normalization); soak-test the async
-  reactor and slow uploads.
+- Future: fuzz the HTTP parser, path normalizer, listing escaper, and the
+  multipart state machine; property-test the path invariant (`..` cannot
+  survive normalization); soak-test the async reactor and slow uploads.
 
 ## Known risks
 

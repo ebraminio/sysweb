@@ -115,6 +115,7 @@ impl Platform for Sys {
     type Dir = Dir;
 
     fn set_root(&mut self, root: &[u8]) -> Result<()> {
+        abi::block_sigpipe()?;
         let fd = abi::open_root(root)?;
         if self.root_fd >= 0 {
             let _ = abi::close(self.root_fd);
@@ -135,7 +136,10 @@ impl Platform for Sys {
         loop {
             match abi::accept(listener.fd) {
                 Err(Error::Interrupted) => continue,
-                Ok(fd) => return Ok(Stream { fd }),
+                Ok(fd) => {
+                    abi::configure_stream(fd)?;
+                    return Ok(Stream { fd });
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -189,6 +193,26 @@ impl Platform for Sys {
                 other => return other,
             }
         }
+    }
+
+    fn send_file(
+        &mut self,
+        stream: &mut Self::Stream,
+        file: &mut Self::File,
+        offset: u64,
+        len: u64,
+    ) -> Result<u64> {
+        let mut sent = 0u64;
+        while sent < len {
+            let want = core::cmp::min(len - sent, 1 << 30) as usize;
+            match abi::sendfile(stream.fd, file.fd, offset + sent, want) {
+                Ok(0) => break,
+                Ok(count) => sent += count as u64,
+                Err(Error::Interrupted) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(sent)
     }
 
     fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir> {

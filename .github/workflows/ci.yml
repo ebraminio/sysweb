@@ -16,7 +16,7 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - macos-14
+          - macos-26
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +26,9 @@ jobs:
 
       - name: Format
         run: cargo fmt --all -- --check
+
+      - name: Dependency policy
+        run: ./scripts/check-no-deps.sh
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -42,37 +45,8 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
-      - name: Prove Linux has no libc
-        if: runner.os == 'Linux'
-        run: |
-          set -eux
-          file target/release/syswebd
-          readelf -h target/release/syswebd | grep 'Type:.*EXEC'
-          if readelf -l target/release/syswebd | grep -q 'INTERP'; then
-            echo 'unexpected PT_INTERP: binary is not static'
-            exit 1
-          fi
-          if readelf -d target/release/syswebd 2>/dev/null | grep -q 'NEEDED'; then
-            echo 'unexpected DT_NEEDED entry'
-            exit 1
-          fi
-          if nm -u target/release/syswebd 2>/dev/null | grep -q .; then
-            echo 'unexpected undefined symbols'
-            exit 1
-          fi
-          ls -l target/release/syswebd
-
-      - name: Prove macOS imports no symbols
-        if: runner.os == 'macOS'
-        run: |
-          set -eux
-          file target/release/syswebd
-          otool -L target/release/syswebd
-          if nm -u target/release/syswebd 2>/dev/null | grep -q .; then
-            echo 'unexpected undefined symbols'
-            exit 1
-          fi
-          ls -l target/release/syswebd
+      - name: Verify no external runtime dependencies
+        run: ./scripts/check-binary.sh target/release/syswebd
 
   linux-aarch64-check:
     name: check (linux aarch64)

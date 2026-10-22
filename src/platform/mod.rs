@@ -106,6 +106,15 @@ pub trait Platform {
     fn open(&mut self, path: &[u8]) -> Result<Self::File>;
     fn file_info(&mut self, file: &Self::File) -> Result<FileInfo>;
     fn read_file(&mut self, file: &mut Self::File, buf: &mut [u8]) -> Result<usize>;
+    /// Send up to `len` bytes from `file` starting at `offset` to `stream`
+    /// using the OS zero-copy path. Returns the number of bytes sent.
+    fn send_file(
+        &mut self,
+        stream: &mut Self::Stream,
+        file: &mut Self::File,
+        offset: u64,
+        len: u64,
+    ) -> Result<u64>;
 
     /// Open a directory (relative to the document root) for iteration.
     /// Symlinks anywhere beneath the root are refused.

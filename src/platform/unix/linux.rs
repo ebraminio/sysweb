@@ -16,7 +16,9 @@ mod nr {
     pub const STATX: usize = 332;
     pub const SOCKET: usize = 41;
     pub const ACCEPT: usize = 43;
+    pub const SENDFILE: usize = 40;
     pub const SENDTO: usize = 44;
+    pub const RT_SIGPROCMASK: usize = 14;
     pub const BIND: usize = 49;
     pub const LISTEN: usize = 50;
     pub const SETSOCKOPT: usize = 54;
@@ -35,7 +37,9 @@ mod nr {
     pub const STATX: usize = 291;
     pub const SOCKET: usize = 198;
     pub const ACCEPT: usize = 202;
+    pub const SENDFILE: usize = 71;
     pub const SENDTO: usize = 206;
+    pub const RT_SIGPROCMASK: usize = 135;
     pub const BIND: usize = 200;
     pub const LISTEN: usize = 201;
     pub const SETSOCKOPT: usize = 208;
@@ -63,7 +67,10 @@ const O_WRONLY: usize = 1;
 const O_CREAT: usize = 0x40;
 const O_EXCL: usize = 0x80;
 const O_TRUNC: usize = 0x200;
+#[cfg(target_arch = "x86_64")]
 const O_DIRECTORY: usize = 0x10000;
+#[cfg(target_arch = "aarch64")]
+const O_DIRECTORY: usize = 0x4000;
 const O_CLOEXEC: usize = 0x80000;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
 const MODE_FILE: usize = 0o644;
@@ -334,6 +341,46 @@ pub fn send(fd: i32, buf: &[u8]) -> Result<usize> {
         )
     };
     decode(result)
+}
+
+pub fn sendfile(out_fd: i32, in_fd: i32, offset: u64, count: usize) -> Result<usize> {
+    let mut offset = offset as i64;
+    let result = unsafe {
+        syscall6(
+            SENDFILE,
+            out_fd as usize,
+            in_fd as usize,
+            &mut offset as *mut i64 as usize,
+            count,
+            0,
+            0,
+        )
+    };
+    decode(result)
+}
+
+/// Block SIGPIPE process-wide. `sendfile` has no per-call MSG_NOSIGNAL flag,
+/// so a client disconnect must produce EPIPE instead of killing the process.
+pub fn block_sigpipe() -> Result<()> {
+    const SIGPIPE_BIT: u64 = 1 << (13 - 1);
+    const SIG_BLOCK: usize = 0;
+    let set = SIGPIPE_BIT;
+    let result = unsafe {
+        syscall6(
+            RT_SIGPROCMASK,
+            SIG_BLOCK,
+            &set as *const u64 as usize,
+            0,
+            8,
+            0,
+            0,
+        )
+    };
+    decode(result).map(|_| ())
+}
+
+pub fn configure_stream(_fd: i32) -> Result<()> {
+    Ok(())
 }
 
 pub fn write_fd(fd: i32, buf: &[u8]) {

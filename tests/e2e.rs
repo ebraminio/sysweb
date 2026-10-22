@@ -47,6 +47,8 @@ fn create_fixtures(root: &Path, outside: &Path) {
     write_file(root, "blob.bin", &[0u8, 1, 2, 3, 0xff, 0xfe, 0, 42]);
     let large: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
     write_file(root, "large.bin", &large);
+    let huge: Vec<u8> = (0..8_000_000u32).map(|i| (i % 251) as u8).collect();
+    write_file(root, "huge.bin", &huge);
 
     write_file(root, "assets/hello world.txt", b"hello list");
     write_file(root, "assets/app.js", b"console.log(1)");
@@ -129,6 +131,29 @@ fn get(port: u16, target: &str) -> Vec<u8> {
 fn put(port: u16, target: &str, body: &[u8]) -> Vec<u8> {
     let mut raw = format!(
         "PUT {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    raw.extend_from_slice(body);
+    request(port, &raw)
+}
+
+fn multipart_body(boundary: &str, filename: &str, content: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n")
+            .as_bytes(),
+    );
+    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+    body.extend_from_slice(content);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+fn post_multipart(port: u16, target: &str, boundary: &str, body: &[u8]) -> Vec<u8> {
+    let mut raw = format!(
+        "POST {target} HTTP/1.1\r\nHost: localhost\r\n         Content-Type: multipart/form-data; boundary={boundary}\r\n         Content-Length: {}\r\n\r\n",
         body.len()
     )
     .into_bytes();
@@ -230,6 +255,14 @@ fn serves_static_files_and_directory_indexes() {
     assert_eq!(body[0], 0);
     assert_eq!(body[39_999], (39_999u32 % 251) as u8);
 
+    let response = get(port, "/huge.bin");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(header(&head, "Content-Length"), Some("8000000"));
+    assert_eq!(body.len(), 8_000_000);
+    assert_eq!(body[0], 0);
+    assert_eq!(body[7_999_999], (7_999_999u32 % 251) as u8);
+
     let response = get(port, "/missing");
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 404 Not Found");
@@ -320,6 +353,12 @@ fn no_index_is_403_but_static_index_is_still_served() {
 
     // Uploads are off unless explicitly requested.
     let response = put(port, "/assets/new.txt", b"nope");
+    let (head, _) = split(&response);
+    assert_status(&head, "HTTP/1.1 405 Method Not Allowed");
+    assert_eq!(header(&head, "Allow"), Some("GET, HEAD"));
+
+    let body = multipart_body("noindex", "x.txt", b"x");
+    let response = post_multipart(port, "/assets/", "noindex", &body);
     let (head, _) = split(&response);
     assert_status(&head, "HTTP/1.1 405 Method Not Allowed");
     assert_eq!(header(&head, "Allow"), Some("GET, HEAD"));
@@ -428,6 +467,102 @@ fn uploads_create_files_and_directories() {
     std::thread::sleep(Duration::from_millis(100));
     let response = get(port, "/assets/partial.txt");
     assert_status(&split(&response).0, "HTTP/1.1 404 Not Found");
+}
+
+#[test]
+fn multipart_forms_work_for_old_browsers() {
+    let server = start_server(&["--upload"]);
+    let port = server.port;
+
+    // The page contains a no-JavaScript multipart form.
+    let page = text(&get(port, "/assets/"));
+    assert!(page.contains("enctype=\"multipart/form-data\""));
+
+    // Classic form post to a directory: filename comes from the part.
+    let body = multipart_body("----syswebForm", "old.txt", b"hello from a form");
+    let response = post_multipart(port, "/assets/", "----syswebForm", &body);
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 201 Created");
+    assert_eq!(body, b"UPLOADED\n");
+    let response = get(port, "/assets/old.txt");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"hello from a form");
+
+    // Old IE sends a full Windows path in filename=; only the basename is used.
+    let body = multipart_body(
+        "----syswebIE",
+        "C:\\fakepath\\ie.txt",
+        b"from an old browser",
+    );
+    let response = post_multipart(port, "/assets/", "----syswebIE", &body);
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    let response = get(port, "/assets/ie.txt");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"from an old browser");
+
+    // A large part crosses many 16 KiB reads and parser buffer refills.
+    let large: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+    let body = multipart_body("----syswebLarge", "large-form.bin", &large);
+    let response = post_multipart(port, "/assets/", "----syswebLarge", &body);
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    let response = get(port, "/assets/large-form.bin");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, large);
+
+    // A form upload can also use Expect: 100-continue.
+    let body = multipart_body("----expectform", "expect-form.txt", b"waited");
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("timeout");
+    let headers = format!(
+        "POST /assets/ HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=----expectform\r\nContent-Length: {}\r\nExpect: 100-continue\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(headers.as_bytes()).expect("headers");
+    let mut interim = [0u8; 64];
+    let count = stream.read(&mut interim).expect("interim");
+    assert!(interim[..count].starts_with(b"HTTP/1.1 100 Continue"));
+    stream.write_all(&body).expect("body");
+    let mut final_response = Vec::new();
+    stream
+        .read_to_end(&mut final_response)
+        .expect("final response");
+    assert_status(&split(&final_response).0, "HTTP/1.1 201 Created");
+    assert_eq!(&split(&get(port, "/assets/expect-form.txt")).1, b"waited");
+
+    // When the target is a file path, the URL wins over the part filename.
+    let body = multipart_body("----fixed", "ignored.txt", b"fixed target");
+    let response = post_multipart(port, "/assets/fixed.txt", "----fixed", &body);
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    assert_eq!(&split(&get(port, "/assets/fixed.txt")).1, b"fixed target");
+
+    // A truncated multipart body cleans up the partial file.
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let prefix = b"--partial\r\nContent-Disposition: form-data; name=\"file\"; filename=\"partial-form.txt\"\r\n\r\nabc";
+    let headers = "POST /assets/ HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=partial\r\nContent-Length: 1000\r\n\r\n";
+    stream.write_all(headers.as_bytes()).expect("headers");
+    stream.write_all(prefix).expect("partial body");
+    drop(stream);
+    std::thread::sleep(Duration::from_millis(100));
+    let response = get(port, "/assets/partial-form.txt");
+    assert_status(&split(&response).0, "HTTP/1.1 404 Not Found");
+
+    // Wrong media type and missing file part are rejected.
+    let response = request(
+        port,
+        b"POST /assets/x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nContent-Type: text/plain\r\n\r\n",
+    );
+    assert_status(&split(&response).0, "HTTP/1.1 415 Unsupported Media Type");
+
+    let body =
+        b"--nofile\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nhello\r\n--nofile--\r\n"
+            .to_vec();
+    let response = post_multipart(port, "/assets/", "nofile", &body);
+    assert_status(&split(&response).0, "HTTP/1.1 400 Bad Request");
 }
 
 #[test]

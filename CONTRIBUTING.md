@@ -87,6 +87,16 @@ behavior and a test.
 
 Uploads deserve extra care: require `Content-Length`, enforce the cap, stream
 in fixed chunks, unlink partial files, and keep the feature behind `--upload`.
+The multipart parser must stay incremental: never buffer a whole body, add
+chunk-split tests for every state transition, keep the 32 KiB buffer bound, and
+sanitize filenames before touching the filesystem.
+
+For release checks, run:
+
+```sh
+./scripts/check-binary.sh target/release/syswebd
+./scripts/check-no-deps.sh
+```
 
 ## Security
 

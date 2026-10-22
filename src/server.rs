@@ -5,6 +5,7 @@ use crate::fixedbuf::FixedBuf;
 use crate::http::{self, Method, Status};
 use crate::listing::{self, LISTING_BUF};
 use crate::mime;
+use crate::multipart::{self, Sink, SinkError};
 use crate::path::{self, MAX_PATH, MAX_URL_PATH};
 use crate::platform::{Error, FileInfo, Platform};
 
@@ -14,9 +15,10 @@ const HEADER_BUF: usize = 4096;
 const LOG_BUF: usize = 1200;
 const LOCATION_BUF: usize = MAX_URL_PATH * 3 + 2;
 const MAX_UPLOAD: u64 = 1 << 30; // 1 GiB
+const MAX_MULTIPART: u64 = MAX_UPLOAD + 1024 * 1024;
 
 const ALLOW_READ: &[u8] = b"GET, HEAD";
-const ALLOW_UPLOAD: &[u8] = b"GET, HEAD, PUT";
+const ALLOW_UPLOAD: &[u8] = b"GET, HEAD, PUT, POST";
 const CONTINUE: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
 const UPLOADED: &[u8] = b"UPLOADED\n";
 const CREATED: &[u8] = b"CREATED\n";
@@ -106,6 +108,7 @@ impl<P: Platform> Server<P> {
 
         match request.method {
             Method::Put => self.handle_put(stream, &request, &request_buf[..used]),
+            Method::Post => self.handle_post(stream, &request, &request_buf[..used]),
             Method::Get | Method::Head => self.handle_get(stream, &request),
         }
     }
@@ -279,6 +282,157 @@ impl<P: Platform> Server<P> {
         ) {
             self.log_request(Method::Get, url_path, Status::Ok, html.len() as u64);
         }
+    }
+
+    fn handle_post(&mut self, stream: &mut P::Stream, request: &http::Request<'_>, raw: &[u8]) {
+        if !self.config.upload() {
+            self.send_error(stream, Status::MethodNotAllowed, false, ALLOW_READ);
+            return;
+        }
+
+        let content_length = match request.content_length {
+            Some(length) => length,
+            None => {
+                self.send_error(stream, Status::LengthRequired, false, b"");
+                return;
+            }
+        };
+        if content_length > MAX_MULTIPART {
+            self.send_error(stream, Status::PayloadTooLarge, false, b"");
+            return;
+        }
+        let content_type = match request.content_type {
+            Some(value) => value,
+            None => {
+                self.send_error(stream, Status::UnsupportedMediaType, false, b"");
+                return;
+            }
+        };
+        let mut parser = match multipart::Parser::new(content_type, MAX_MULTIPART) {
+            Ok(parser) => parser,
+            Err(multipart::ParseError::UnsupportedContentType) => {
+                self.send_error(stream, Status::UnsupportedMediaType, false, b"");
+                return;
+            }
+            Err(multipart::ParseError::TooLarge) => {
+                self.send_error(stream, Status::PayloadTooLarge, false, b"");
+                return;
+            }
+            Err(_) => {
+                self.send_error(stream, Status::BadRequest, false, b"");
+                return;
+            }
+        };
+
+        let mut url_path = [0u8; MAX_URL_PATH];
+        let url_len = match path::normalize(request.target, &mut url_path) {
+            Ok(len) => len,
+            Err(path::PathError::TooLong) => {
+                self.send_error(stream, Status::UriTooLong, false, b"");
+                return;
+            }
+            Err(_) => {
+                self.send_error(stream, Status::BadRequest, false, b"");
+                return;
+            }
+        };
+        let rel_path = root_relative(&url_path[..url_len]);
+        let target = if url_path[..url_len].ends_with(b"/") {
+            MultipartTarget::Directory(rel_path)
+        } else {
+            MultipartTarget::File(rel_path)
+        };
+
+        let mut sink = MultipartSink::new(&mut self.platform, target, self.config.replace());
+        let mut remaining = content_length;
+        let leftover = &raw[request.body_offset..];
+        let take = core::cmp::min(leftover.len() as u64, remaining) as usize;
+
+        if take == 0
+            && remaining > 0
+            && request.expect_continue
+            && sink.platform.write_all(stream, CONTINUE).is_err()
+        {
+            drop(sink);
+            self.send_error(stream, Status::BadRequest, false, b"");
+            return;
+        }
+
+        if take > 0 {
+            if let Err(error) = parser.feed(&leftover[..take], &mut sink) {
+                sink.abort();
+                drop(sink);
+                self.send_multipart_error(stream, error);
+                return;
+            }
+            remaining -= take as u64;
+        }
+
+        let mut buffer = [0u8; FILE_BUF];
+        while remaining > 0 {
+            let want = core::cmp::min(remaining, FILE_BUF as u64) as usize;
+            let count = match sink.platform.read(stream, &mut buffer[..want]) {
+                Ok(0) => {
+                    sink.abort();
+                    drop(sink);
+                    self.send_error(stream, Status::BadRequest, false, b"");
+                    return;
+                }
+                Ok(count) => count,
+                Err(_) => {
+                    sink.abort();
+                    drop(sink);
+                    self.send_error(stream, Status::BadRequest, false, b"");
+                    return;
+                }
+            };
+            if let Err(error) = parser.feed(&buffer[..count], &mut sink) {
+                sink.abort();
+                drop(sink);
+                self.send_multipart_error(stream, error);
+                return;
+            }
+            remaining -= count as u64;
+        }
+
+        if let Err(error) = parser.finish(&mut sink) {
+            sink.abort();
+            drop(sink);
+            self.send_multipart_error(stream, error);
+            return;
+        }
+        drop(sink);
+
+        if self.send_body(
+            stream,
+            Status::Created,
+            b"text/plain; charset=utf-8",
+            UPLOADED,
+            false,
+            b"",
+            None,
+        ) {
+            self.log_request(
+                Method::Post,
+                &url_path[..url_len],
+                Status::Created,
+                UPLOADED.len() as u64,
+            );
+        }
+    }
+
+    fn send_multipart_error(&mut self, stream: &mut P::Stream, error: multipart::ParseError) {
+        let status = match error {
+            multipart::ParseError::UnsupportedContentType => Status::UnsupportedMediaType,
+            multipart::ParseError::TooLarge => Status::PayloadTooLarge,
+            multipart::ParseError::NoFile | multipart::ParseError::Malformed => Status::BadRequest,
+            multipart::ParseError::Sink(SinkError::Conflict) => Status::Conflict,
+            multipart::ParseError::Sink(SinkError::Forbidden) => Status::Forbidden,
+            multipart::ParseError::Sink(SinkError::NotFound) => Status::NotFound,
+            multipart::ParseError::Sink(SinkError::TooManyFiles) => Status::BadRequest,
+            multipart::ParseError::Sink(SinkError::Io) => Status::InternalServerError,
+        };
+        self.send_error(stream, status, false, b"");
     }
 
     fn handle_put(&mut self, stream: &mut P::Stream, request: &http::Request<'_>, raw: &[u8]) {
@@ -488,21 +642,10 @@ impl<P: Platform> Server<P> {
             return true;
         }
 
-        let mut buffer = [0u8; FILE_BUF];
-        let mut remaining = info.len;
-        while remaining > 0 {
-            let want = core::cmp::min(remaining, FILE_BUF as u64) as usize;
-            let count = match self.platform.read_file(file, &mut buffer[..want]) {
-                Ok(0) => break,
-                Ok(count) => count,
-                Err(_) => return false,
-            };
-            if self.platform.write_all(stream, &buffer[..count]).is_err() {
-                return false;
-            }
-            remaining -= count as u64;
+        match self.platform.send_file(stream, file, 0, info.len) {
+            Ok(sent) => sent == info.len,
+            Err(_) => false,
         }
-        true
     }
 
     fn send_redirect(&mut self, stream: &mut P::Stream, path: &[u8], head_only: bool) -> bool {
@@ -622,6 +765,110 @@ impl<P: Platform> Server<P> {
         let _ = line.push(status.reason());
         let _ = line.push_byte(b'\n');
         self.platform.log(line.as_slice());
+    }
+}
+
+enum MultipartTarget<'a> {
+    Directory(&'a [u8]),
+    File(&'a [u8]),
+}
+
+struct MultipartSink<'a, P: Platform> {
+    platform: &'a mut P,
+    target: MultipartTarget<'a>,
+    replace: bool,
+    file: Option<P::File>,
+    path: [u8; MAX_PATH],
+    path_len: usize,
+    files: usize,
+}
+
+impl<'a, P: Platform> MultipartSink<'a, P> {
+    fn new(platform: &'a mut P, target: MultipartTarget<'a>, replace: bool) -> Self {
+        Self {
+            platform,
+            target,
+            replace,
+            file: None,
+            path: [0; MAX_PATH],
+            path_len: 0,
+            files: 0,
+        }
+    }
+
+    fn abort(&mut self) {
+        self.file = None;
+        if self.path_len > 0 {
+            let _ = self.platform.remove_file(&self.path[..self.path_len]);
+        }
+    }
+}
+
+impl<P: Platform> Sink for MultipartSink<'_, P> {
+    fn begin_file(&mut self, filename: &[u8]) -> core::result::Result<(), SinkError> {
+        if self.files > 0 {
+            return Err(SinkError::TooManyFiles);
+        }
+
+        let mut len;
+        match self.target {
+            MultipartTarget::File(path) => {
+                if path.len() + filename.len() + 1 >= MAX_PATH {
+                    return Err(SinkError::Io);
+                }
+                self.path[..path.len()].copy_from_slice(path);
+                len = path.len();
+            }
+            MultipartTarget::Directory(directory) => {
+                if directory == b"." {
+                    if filename.len() + 1 >= MAX_PATH {
+                        return Err(SinkError::Io);
+                    }
+                    self.path[..filename.len()].copy_from_slice(filename);
+                    len = filename.len();
+                } else {
+                    if directory.len() + filename.len() + 2 >= MAX_PATH {
+                        return Err(SinkError::Io);
+                    }
+                    self.path[..directory.len()].copy_from_slice(directory);
+                    len = directory.len();
+                    if self.path[len - 1] != b'/' {
+                        self.path[len] = b'/';
+                        len += 1;
+                    }
+                    self.path[len..len + filename.len()].copy_from_slice(filename);
+                    len += filename.len();
+                }
+            }
+        }
+
+        let file = self
+            .platform
+            .create_file(&self.path[..len], self.replace)
+            .map_err(|error| match error {
+                Error::AlreadyExists | Error::IsADirectory => SinkError::Conflict,
+                Error::PermissionDenied => SinkError::Forbidden,
+                Error::NotFound => SinkError::NotFound,
+                _ => SinkError::Io,
+            })?;
+        self.path_len = len;
+        self.file = Some(file);
+        Ok(())
+    }
+
+    fn write(&mut self, data: &[u8]) -> core::result::Result<(), SinkError> {
+        let file = self.file.as_mut().ok_or(SinkError::Io)?;
+        self.platform
+            .write_file(file, data)
+            .map_err(|_| SinkError::Io)
+    }
+
+    fn end_file(&mut self) -> core::result::Result<(), SinkError> {
+        if self.file.take().is_none() {
+            return Err(SinkError::Io);
+        }
+        self.files += 1;
+        Ok(())
     }
 }
 

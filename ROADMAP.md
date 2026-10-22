@@ -23,7 +23,7 @@ The current release (milestone 0.5).
       requirement.
 - [x] HTTP/1.0 and HTTP/1.1 request parsing for `GET`/`HEAD`/`PUT`.
 - [x] `Content-Length` and `Expect: 100-continue`; chunked bodies rejected.
-- [x] Static files, `index.html`, MIME table, 16 KiB streaming.
+- [x] Static files, `index.html`, MIME table, `sendfile`.
 - [x] Built-in directory index with metadata, breadcrumbs, sorting, and a
       self-contained 64 KiB HTML/CSS/JS page.
 - [x] Opt-in raw `PUT` uploads, folder creation, `--replace`, 1 GiB cap, and
@@ -36,18 +36,27 @@ The current release (milestone 0.5).
 - [x] `Content-Length`, `Content-Type`, `Server`, `Connection: close`.
 - [x] IPv4 bind, CLI (`--root`, `--port`, `--host`, `--backlog`, `--upload`,
       `--replace`, `--no-index`, `--quiet`).
-- [x] Unit tests + four real-binary end-to-end tests.
-- [x] CI workflow for Linux and macOS, including `cargo test --release` to
+- [x] Unit tests + five real-binary end-to-end tests.
+- [x] CI workflow for Linux and macOS 26 arm64, including `cargo test
+      --release` to
       catch LTO-only libcall bugs.
 - [x] Latest-API policy: `openat2` + `RESOLVE_NO_SYMLINKS` and `statx` on
       Linux, `O_NOFOLLOW_ANY` on macOS, all relative to a document-root fd.
 - [x] All symlinks beneath the root denied (final and intermediate).
-- [x] Demonstrated: 66,480-byte macOS binary with `nm -u` empty; 43,408-byte
-      (x86_64) and 41,904-byte (aarch64) static Linux ELFs with no dynamic
+- [x] `sendfile` file serving, with SIGPIPE-safe aborted downloads.
+- [x] Streaming `multipart/form-data` form uploads for old/no-JS browsers,
+      plus a no-JS form in the directory index.
+- [x] Reusable `scripts/check-binary.sh` and `scripts/check-no-deps.sh` used
+      by CI.
+- [x] Runtime-tested on a Raspberry Pi 5 (kernel 6.12 aarch64): listings,
+      uploads, forms, `sendfile`, symlink denial, aborted transfers.
+- [x] Demonstrated: 66,496-byte macOS binary with `nm -u` empty; 50,920-byte
+      (x86_64) and 49,128-byte (aarch64) static Linux ELFs with no dynamic
       section.
 
 **Known gaps:** single-threaded blocking, no timeouts, no keep-alive, no `Date`,
-no `Range`, no auth/delete/rename, macOS Intel unsupported, no Windows backend.
+no `Range`, no auth/delete/rename, classic forms accept one file, macOS Intel
+unsupported, no Windows backend.
 Minimums are Linux 5.6+, macOS 11+, and Windows 10 1809+; there are no legacy
 fallbacks.
 
@@ -69,8 +78,7 @@ Make the blocking server pleasant and safe enough to run on a LAN.
 - [ ] `Keep-Alive` with a bounded request count and idle timeout.
 - [ ] `HEAD` for every error path (already done, keep under test).
 - [ ] Optional `OPTIONS`/`TRACE` policy: 405 with `Allow` is fine.
-- [ ] Optional multipart/form-data compatibility for clients that cannot send a
-      raw `PUT` body.
+- [ ] Multi-file multipart forms and RFC 5987 `filename*` names.
 - [ ] Listing pagination or chunked rendering for directories whose page
       exceeds 64 KiB.
 
@@ -181,11 +189,10 @@ Acceptance: a `.exe` that serves the same test suite, imports no
 
 ## M4 — Zero-copy and Linux acceleration 🗺️
 
-- [ ] Linux `sendfile(2)` for the header + file body (or header, then
-      `sendfile` for the body).
-- [ ] Linux `splice(2)` for file→socket paths where `sendfile` does not apply.
-- [ ] macOS `sendfile(2)` (raw syscall number 337) with `SF_NODISKIO` behavior
-      documented.
+- [x] Linux/macOS `sendfile(2)` for file bodies. (Moved to M0.)
+- [ ] Linux `splice(2)`/io_uring `SPLICE` for paths where `sendfile` does not
+      apply.
+- [ ] macOS `SF_NODISKIO` behavior documented.
 - [ ] `io_uring` backend as an alternative Linux reactor:
       `io_uring_setup` (425), `io_uring_enter` (426), `io_uring_register` (427).
 - [ ] Decide whether `mmap` is ever worth it for static files; likely not with
@@ -246,8 +253,8 @@ Every milestone must preserve:
   publishing.
 - How much of io_uring should be used directly (`IORING_OP_*`) versus keeping
   the portable readiness layer for macOS/Windows parity?
-- Does `sendfile` measurably beat a 16 KiB read/write loop for files that are
-  already in page cache?
+- Does `splice` or io_uring `SEND_ZC` measurably beat `sendfile` for files that
+  are already in page cache?
 - How should Windows express `Platform` file handles when IOCP needs
   `OVERLAPPED` state? Likely a separate `AsyncFile` associated type.
 - Can `async fn` in traits be used without an allocator/executor, or is the

@@ -20,6 +20,7 @@ const FSTAT: usize = 189;
 const SOCKET: usize = 97;
 const ACCEPT: usize = 30;
 const SENDTO: usize = 133;
+const SENDFILE: usize = 337;
 const BIND: usize = 104;
 const LISTEN: usize = 106;
 const SETSOCKOPT: usize = 105;
@@ -34,6 +35,7 @@ const AF_INET: usize = 2;
 const SOCK_STREAM: usize = 1;
 const SOL_SOCKET: usize = 0xffff;
 const SO_REUSEADDR: usize = 4;
+const SO_NOSIGPIPE: usize = 0x1022;
 const MSG_NOSIGNAL: usize = 0x80000;
 const AT_FDCWD: usize = (-2isize) as usize;
 const AT_SYMLINK_NOFOLLOW: usize = 0x20;
@@ -263,6 +265,49 @@ pub fn send(fd: i32, buf: &[u8]) -> Result<usize> {
             0,
         )
     }
+}
+
+pub fn sendfile(out_fd: i32, in_fd: i32, offset: u64, count: usize) -> Result<usize> {
+    let mut length = count as i64;
+    let result = unsafe {
+        syscall6(
+            SENDFILE,
+            in_fd as usize,
+            out_fd as usize,
+            offset as usize,
+            &mut length as *mut i64 as usize,
+            0,
+            0,
+        )
+    };
+    result?;
+    if length < 0 {
+        Err(Error::InvalidInput)
+    } else {
+        Ok(length as usize)
+    }
+}
+
+/// Darwin's `sendfile` can raise SIGPIPE; set SO_NOSIGPIPE on every accepted
+/// socket instead of touching the process signal mask.
+pub fn configure_stream(fd: i32) -> Result<()> {
+    let one: i32 = 1;
+    unsafe {
+        syscall6(
+            SETSOCKOPT,
+            fd as usize,
+            SOL_SOCKET,
+            SO_NOSIGPIPE,
+            &one as *const i32 as usize,
+            4,
+            0,
+        )
+    }
+    .map(|_| ())
+}
+
+pub fn block_sigpipe() -> Result<()> {
+    Ok(())
 }
 
 pub fn write_fd(fd: i32, buf: &[u8]) {

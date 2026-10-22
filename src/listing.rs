@@ -250,7 +250,12 @@ pub fn render<P: Platform>(
     }
 
     if upload {
-        if !out.push(b"<div class=\"tools\">")
+        if !out.push(b"<noscript><style>.js-only{display:none}</style>")
+            || !out.push(b"<form class=\"tools\" method=\"post\" enctype=\"multipart/form-data\" action=\"\">")
+            || !out.push(b"<label class=\"btn primary\">Upload (form)<input type=\"file\" name=\"file\"></label>")
+            || !out.push(b"<button class=\"btn\" type=\"submit\">Upload</button>")
+            || !out.push(b"</form></noscript>\n")
+            || !out.push(b"<div class=\"tools js-only\">")
             || !out.push(
                 b"<label class=\"btn primary\">Upload<input id=\"file\" type=\"file\" multiple></label>",
             )
@@ -258,7 +263,7 @@ pub fn render<P: Platform>(
                 b"<button id=\"mkdir\" class=\"btn\" type=\"button\">New folder</button>",
             )
             || !out.push(b"<span id=\"status\" role=\"status\" aria-live=\"polite\"></span>")
-            || !out.push(b"</div>\n<div id=\"drop\">Drop files to upload</div>\n")
+            || !out.push(b"</div>\n<div id=\"drop\" class=\"js-only\">Drop files to upload</div>\n")
         {
             return false;
         }

@@ -66,8 +66,13 @@ Out of scope for 0.1:
   never echoed.
 - **Bounded reads/writes.** The parser stops at `\r\n\r\n` or 8 KiB; file
   streaming and uploads stop at `Content-Length`.
-- **`MSG_NOSIGNAL`.** A client disconnect during a write does not kill the
-  process with `SIGPIPE` on Linux or macOS.
+- **SIGPIPE-safe disconnects.** Normal writes use `MSG_NOSIGNAL`; Linux blocks
+  `SIGPIPE` process-wide for `sendfile`, and macOS sets `SO_NOSIGPIPE` on every
+  accepted socket. An aborted download yields `EPIPE`, not process death.
+- **Bounded multipart forms.** Classic `POST` forms use a streaming parser with
+  a 32 KiB buffer; filenames are reduced to a basename and reject separators,
+  controls, NUL, `.` and `..`; only one file part is accepted; non-file fields
+  are discarded; the 1 GiB cap still applies.
 - **Read-only by default.** Files are opened `O_RDONLY`; uploads and folder
   creation require `--upload`, and overwriting requires `--replace`.
 - **No symlinks beneath the document root.** Linux uses `openat2` with
@@ -118,6 +123,11 @@ With `--upload`, anyone who can reach the port can write files, create
 directories, and (with `--replace`) overwrite them. There is no authentication,
 quota, or per-client limit. Keep the loopback default, or put an authenticated
 reverse proxy in front.
+
+The classic multipart form uses a normal HTML `POST`, which browsers do not
+CORS-preflight. A hostile page cannot populate a file input with an arbitrary
+local file, but do not rely on browser file-input rules as the only boundary:
+keep uploads off on untrusted networks.
 
 Uploaded HTML/SVG can be served back with an active content type. If you enable
 uploads on an origin that also hosts sensitive pages or cookies, this becomes a

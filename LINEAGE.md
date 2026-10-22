@@ -81,7 +81,7 @@ page. There is no bundle, no build step, and no asset directory to lose.
 | Node runtime, one `.html` file | Static Rust binary, no runtime |
 | `require('http')`, Node streams | Raw syscalls behind a `Platform` trait |
 | Heap, buffers, arrays, callbacks | Fixed buffers, no allocator, blocking loop |
-| Multipart upload parser | Raw `PUT` with `Content-Length` (browser `fetch`/XHR and `curl -T`) |
+| Multipart upload parser | Raw `PUT` primary; bounded `multipart/form-data` `POST` for classic forms |
 | Directory HTML built from arrays | 64 KiB fixed HTML buffer, streamed escaping/encoding |
 | `fs.readdir`, `fs.stat` | `getdents64`/`getdirentries64`, `statx`/`fstatat` |
 | Follows links unless checked | All symlinks beneath the root denied |
@@ -89,9 +89,10 @@ page. There is no bundle, no build step, and no asset directory to lose.
 | `--cmd` command execution | Never implemented; remote code execution is not a feature |
 | `config.json` | CLI flags; a config file is roadmap |
 
-The multipart choice is deliberate. A correct, bounded multipart parser is a
-lot of state for little gain when the target clients can send a file as the
-request body:
+Raw `PUT` is still the primary path because it is simpler and supports
+progress cleanly. Classic `multipart/form-data` `POST` is now implemented as a
+bounded compatibility layer for old and no-JavaScript browsers, using a 32 KiB
+streaming parser and one file part per request:
 
 ```sh
 curl -T report.pdf http://127.0.0.1:8080/files/report.pdf
@@ -101,8 +102,8 @@ curl -T report.pdf http://127.0.0.1:8080/files/report.pdf
 await fetch('/files/report.pdf', { method: 'PUT', body: file });
 ```
 
-The built-in UI uses `XMLHttpRequest` so it can show upload progress, but the
-wire format is the same.
+The built-in UI uses `XMLHttpRequest` for progress and a `PUT` body, and also
+contains a `<noscript>` multipart form for browsers without JavaScript.
 
 ## What is deliberately not inherited
 
@@ -114,8 +115,8 @@ wire format is the same.
   read-only and loopback. `--upload` is an explicit decision.
 - **Unbounded request bodies.** Raw uploads are capped at 1 GiB and require
   `Content-Length`; chunked bodies are rejected.
-- **Multipart complexity by default.** It can be added later as an optional
-  compatibility layer, but it is not the primary protocol.
+- **Multipart as the primary protocol.** It is supported only as a bounded
+  compatibility path (one file per request), not as the main wire format.
 
 ## Feature map
 
@@ -125,8 +126,9 @@ wire format is the same.
 | Built-in directory index | ✅ | — |
 | Size / date / type / sort | ✅ | — |
 | Breadcrumbs / parent link | ✅ | — |
-| Upload from browser | ✅ with `--upload` | resumable uploads |
-| Upload from terminal (`curl -T`) | ✅ with `--upload` | `--max-upload` config |
+| Upload from browser | ✅ with `--upload` (`PUT`/XHR + no-JS form) | resumable uploads |
+| Upload from terminal (`curl -T` / `curl -F`) | ✅ with `--upload` | `--max-upload` config |
+| Classic multipart form | ✅ with `--upload`, one file | multi-file forms, `filename*` |
 | Create folder (`PUT .../`) | ✅ with `--upload` | — |
 | Replace existing file | ✅ with `--replace` | atomic temp+rename |
 | Delete | ❌ | opt-in `--delete` |
