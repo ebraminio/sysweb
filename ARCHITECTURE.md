@@ -586,9 +586,13 @@ several.
 - CI runs `cargo test` and `cargo test --release` on Linux and macOS. The
   release run is mandatory because the `bzero`/LTO failure mode did not appear
   in debug builds.
-- Future: fuzz the HTTP parser, path normalizer, listing escaper, and the
-  multipart state machine; property-test the path invariant (`..` cannot
-  survive normalization); soak-test the async reactor and slow uploads.
+- `fuzz/` has libFuzzer targets for `http::parse`, `path::normalize`, and the
+  multipart state machine; `tests/security.rs` sends adversarial and
+  randomized requests to the real binary and checks status bounds, timeouts,
+  process survival, and outside-file leakage.
+- Future: fuzz the listing escaper too; property-test the path invariant
+  (`..` cannot survive normalization) more deeply; soak-test the async reactor
+  and slow uploads.
 
 ## Known risks
 

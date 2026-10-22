@@ -210,7 +210,8 @@ minimal document root.
 - authentication and opt-in delete/rename;
 - CSRF/Origin/Host validation;
 - atomic temp+rename uploads and disk quotas;
-- fuzzing of the parser, path normalizer, and listing escaper;
+- fuzzing of the parser, path normalizer, multipart parser, and listing
+  escaper; the CI fuzz job and `tests/security.rs` cover the first three;
 - a latest-API audit (io_uring, IOCP, `statx`/`openat2` extensions);
 - TLS boundary documentation (likely a separate project);
 - seccomp/pledge-style sandboxing;

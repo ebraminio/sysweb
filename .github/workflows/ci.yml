@@ -48,6 +48,29 @@ jobs:
       - name: Verify no external runtime dependencies
         run: ./scripts/check-binary.sh target/release/syswebd
 
+  fuzz-smoke:
+    name: fuzz smoke (libFuzzer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      - name: Build fuzzers
+        run: cargo fuzz build
+
+      - name: Run fuzz targets
+        run: |
+          for target in http path multipart; do
+            echo "::group::fuzz $target"
+            cargo fuzz run "$target" "fuzz/seeds/$target" -- -timeout=5 -max_total_time=20 -rss_limit_mb=2048
+            echo "::endgroup::"
+          done
+
   linux-aarch64-check:
     name: check (linux aarch64)
     runs-on: ubuntu-latest

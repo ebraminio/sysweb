@@ -29,7 +29,6 @@ The current release (milestone 0.5).
 - [x] Opt-in raw `PUT` uploads, folder creation, `--replace`, 1 GiB cap, and
       failed-upload cleanup.
 - [x] `301` from `/dir` to `/dir/`; `--no-index` mode.
-- [x] Default-port fallback when 8080 is busy and the port was implicit.
 - [x] HTML escaping and URL encoding for listing entries; all symlinks
       beneath the root denied.
 - [x] Percent-decoding, dot-segment normalization, traversal rejection.
@@ -49,6 +48,9 @@ The current release (milestone 0.5).
       plus a no-JS form in the directory index.
 - [x] Reusable `scripts/check-binary.sh` and `scripts/check-no-deps.sh` used
       by CI.
+- [x] `cargo-fuzz` targets for HTTP/path/multipart plus a black-box
+      containment/hang/crash test in `tests/security.rs`.
+- [x] Default-port fallback when the port is implicit and 8080 is busy.
 - [x] Runtime-tested on a Raspberry Pi 5 (kernel 6.12 aarch64): listings,
       uploads, forms, `sendfile`, symlink denial, aborted transfers.
 - [x] Demonstrated: 66,496-byte macOS binary with `nm -u` empty; 50,920-byte
@@ -102,9 +104,6 @@ Make the blocking server pleasant and safe enough to run on a LAN.
 - [ ] `EMFILE` backoff instead of terminating the process.
 - [ ] Configurable maximum request-header size and connection limit.
 - [ ] Never log raw control bytes; keep the current normalized-path logging.
-- [ ] Fuzz targets for `http::parse`, `path::normalize`,
-      `path::append_index`, and the listing escaper (`cargo-fuzz` is test-only
-      tooling, not a runtime dependency).
 - [ ] Property test: no input to `normalize` can produce a `..` segment.
 - [ ] Miri/UB review of the unsafe modules where feasible.
 
@@ -223,7 +222,7 @@ Acceptance: a `.exe` that serves the same test suite, imports no
 - [ ] Reproducible release binaries for Linux x86_64/aarch64 and macOS arm64.
 - [ ] `Dockerfile` using `FROM scratch` for the static Linux binary.
 - [ ] Man page and shell completions.
-- [ ] Fuzzing corpus and a continuous fuzz job.
+- [ ] Broader OSS-Fuzz onboarding and corpus maintenance.
 - [ ] Security policy and disclosure process.
 - [ ] Architecture decision records (ADRs) for syscall choices and the macOS
       ABI risk.

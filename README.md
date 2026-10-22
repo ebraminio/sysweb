@@ -243,6 +243,15 @@ The same checks are available locally and are used by CI:
 `check-binary.sh` verifies the static/EXEC/no-interpreter/no-`NEEDED` shape on
 Linux and the single-`libSystem`/no-undefined-symbols shape on macOS.
 
+Fuzzing and adversarial checks:
+
+- `fuzz/` contains `cargo-fuzz` targets for the HTTP parser, path normalizer,
+  and multipart state machine.
+- `tests/security.rs` fuzzes the **real server** with traversal, symlink,
+  malformed-path, and hundreds of randomized requests, asserting bounded
+  statuses, timeouts, crashes, and no outside-file leakage.
+- CI runs a nightly `cargo fuzz` smoke job and the black-box security test.
+
 ## How it works
 
 ```
@@ -309,7 +318,7 @@ The next milestone is the async reactor abstraction:
 - Range/conditional requests, delete/rename, auth, CORS, prefix;
 - `splice`/io_uring zero-copy paths beyond `sendfile`;
 - multi-file multipart forms and `filename*` support;
-- fuzzing and a larger CI matrix.
+- broader OSS-Fuzz onboarding and a larger CI matrix.
 
 The full plan is in [ROADMAP.md](ROADMAP.md).
 

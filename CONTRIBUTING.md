@@ -91,7 +91,17 @@ The multipart parser must stay incremental: never buffer a whole body, add
 chunk-split tests for every state transition, keep the 32 KiB buffer bound, and
 sanitize filenames before touching the filesystem.
 
-For release checks, run:
+For fuzz changes:
+
+```sh
+cargo check --manifest-path fuzz/Cargo.toml
+cargo +nightly fuzz run http
+cargo +nightly fuzz run path
+cargo +nightly fuzz run multipart
+```
+
+Keep `tests/security.rs` deterministic; it must always leave the server alive
+and must never observe outside-file content. For release checks, run:
 
 ```sh
 ./scripts/check-binary.sh target/release/syswebd
