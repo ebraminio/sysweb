@@ -37,7 +37,7 @@ The current release (milestone 0.5).
 - [x] IPv4 bind, CLI (`--root`, `--port`, `--host`, `--backlog`, `--upload`,
       `--replace`, `--no-index`, `--quiet`).
 - [x] Unit tests + five real-binary end-to-end tests.
-- [x] CI workflow for Linux and macOS 26 arm64, including `cargo test
+- [x] CI workflow for Linux and `macos-latest` arm64, including `cargo test
       --release` to
       catch LTO-only libcall bugs.
 - [x] Latest-API policy: `openat2` + `RESOLVE_NO_SYMLINKS` and `statx` on

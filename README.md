@@ -227,8 +227,8 @@ Current stripped sizes from this workspace:
 | Linux x86_64 | 50,920 B |
 | Linux aarch64 | 49,128 B |
 
-CI runs on `ubuntu-latest` and `macos-26` (Apple Silicon), the current
-`macos-latest` arm64 image. Linux runtime tests run there; both Linux targets
+CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). Linux runtime
+tests run there; both Linux targets
 were cross-built locally, and the aarch64 build was also exercised on a
 Raspberry Pi 5 (kernel 6.12): directory listings, `openat2`/`statx`, `sendfile`, raw `PUT`,
 classic multipart forms, symlink denial, and aborted transfers.
