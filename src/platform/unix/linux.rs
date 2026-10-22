@@ -41,7 +41,7 @@ mod nr {
     pub const SENDFILE: usize = 71;
     pub const SENDTO: usize = 206;
     pub const RT_SIGPROCMASK: usize = 135;
-    pub const NANOSLEEP: usize = 35;
+    pub const NANOSLEEP: usize = 101;
     pub const BIND: usize = 200;
     pub const LISTEN: usize = 201;
     pub const SETSOCKOPT: usize = 208;
