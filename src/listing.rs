@@ -179,7 +179,8 @@ const JS: &[u8] = br###"
 
   if (canUpload) {
     var input = byId('file');
-    var fileApi = !!(input && input.files);
+    var probe = createXhr();
+    var fileApi = !!(input && input.files && probe && probe.upload);
     if (fileApi) {
       reveal(byId('js-tools'), '');
       if (input) addEvent(input, 'change', function () { uploadAll(input.files); });
