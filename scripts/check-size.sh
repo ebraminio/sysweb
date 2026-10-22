@@ -15,7 +15,7 @@ os="$(uname -s)"
 arch="$(uname -m)"
 case "$os/$arch" in
 Darwin/arm64)
-    budget=98304 # 96 KiB
+    budget=114688 # 112 KiB
     ;;
 Linux/x86_64)
     budget=65536 # 64 KiB

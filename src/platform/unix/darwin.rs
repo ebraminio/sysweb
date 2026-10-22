@@ -1,95 +1,149 @@
-//! macOS arm64 raw syscall ABI.
+//! macOS arm64 backend using the public libSystem ABI.
 //!
-//! Apple does not document this ABI as stable, but it is the same interface
-//! libSystem itself uses. The binary imports no libc symbols; ld64 requires a
-//! libSystem load command for any dynamic executable, so the build links it
-//! but never calls into it.
-//!
-//! Syscall convention: number in `x16`, arguments in `x0..x5`, `svc #0x80`,
-//! carry set on error with the errno in `x0`.
+//! Apple does not guarantee the raw syscall numbers or the kernel `stat`
+//! layout. libSystem is the stable interface, and ld64 requires linking it for
+//! any dynamic executable anyway. This backend imports only the libSystem
+//! functions below; it does not use the C runtime startup, std, or an
+//! allocator. Directory iteration uses `fdopendir`/`readdir`, which may
+//! allocate inside libSystem.
 
 use crate::path::MAX_PATH;
 use crate::platform::{Error, FileInfo, Result, SocketAddr};
-use core::arch::asm;
-use core::ptr::read_unaligned;
+use core::ffi::c_void;
+use core::ptr::null_mut;
 
-const READ: usize = 3;
-const WRITE: usize = 4;
-const CLOSE: usize = 6;
-const FSTAT: usize = 189;
-const SOCKET: usize = 97;
-const ACCEPT: usize = 30;
-const SENDTO: usize = 133;
-const SENDFILE: usize = 337;
-const BIND: usize = 104;
-const LISTEN: usize = 106;
-const SETSOCKOPT: usize = 105;
-const GETDIRENTRIES64: usize = 344;
-const OPENAT: usize = 463;
-const FSTATAT: usize = 469;
-const UNLINKAT: usize = 472;
-const MKDIRAT: usize = 475;
-const EXIT: usize = 1;
-const POLL: usize = 230;
+const AF_INET: i32 = 2;
+const SOCK_STREAM: i32 = 1;
+const SOL_SOCKET: i32 = 0xffff;
+const SO_REUSEADDR: i32 = 4;
+const SO_NOSIGPIPE: i32 = 0x1022;
+const AT_FDCWD: i32 = -2;
+const AT_SYMLINK_NOFOLLOW: i32 = 0x20;
 
-const AF_INET: usize = 2;
-const SOCK_STREAM: usize = 1;
-const SOL_SOCKET: usize = 0xffff;
-const SO_REUSEADDR: usize = 4;
-const SO_NOSIGPIPE: usize = 0x1022;
-const MSG_NOSIGNAL: usize = 0x80000;
-const AT_FDCWD: usize = (-2isize) as usize;
-const AT_SYMLINK_NOFOLLOW: usize = 0x20;
+const O_RDONLY: i32 = 0;
+const O_WRONLY: i32 = 1;
+const O_NOFOLLOW_ANY: i32 = 0x2000_0000;
+const O_CLOEXEC: i32 = 0x0100_0000;
+const O_CREAT: i32 = 0x200;
+const O_TRUNC: i32 = 0x400;
+const O_EXCL: i32 = 0x800;
+const O_DIRECTORY: i32 = 0x100000;
+const MODE_FILE: u32 = 0o644;
+const MODE_DIR: u32 = 0o755;
 
-const O_RDONLY: usize = 0;
-const O_WRONLY: usize = 1;
-const O_NOFOLLOW_ANY: usize = 0x2000_0000;
-const O_CLOEXEC: usize = 0x0100_0000;
-const O_CREAT: usize = 0x200;
-const O_TRUNC: usize = 0x400;
-const O_EXCL: usize = 0x800;
-const O_DIRECTORY: usize = 0x100000;
-const MODE_FILE: usize = 0o644;
-const MODE_DIR: usize = 0o755;
+const S_IFMT: u16 = 0o170000;
+const S_IFDIR: u16 = 0o040000;
 
-/// Kernel `struct stat` offsets for the raw arm64 syscall ABI. These differ
-/// from the userspace `struct stat` in the SDK (libSystem translates between
-/// the two); verified on macOS 26/27 arm64.
-const STAT_MODE_OFFSET: usize = 8;
-const STAT_MTIME_OFFSET: usize = 40;
-const STAT_SIZE_OFFSET: usize = 72;
-const STAT_BUFFER_SIZE: usize = 144;
-const S_IFMT: u32 = 0o170000;
-const S_IFDIR: u32 = 0o040000;
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Timespec {
+    tv_sec: i64,
+    tv_nsec: i64,
+}
 
-unsafe fn syscall6(
-    number: usize,
-    a1: usize,
-    a2: usize,
-    a3: usize,
-    a4: usize,
-    a5: usize,
-    a6: usize,
-) -> Result<usize> {
-    let result: isize;
-    let failed: u64;
-    unsafe {
-        asm!(
-            "svc #0x80",
-            "cset {failed}, cs",
-            failed = out(reg) failed,
-            in("x16") number,
-            inlateout("x0") a1 => result,
-            in("x1") a2,
-            in("x2") a3,
-            in("x3") a4,
-            in("x4") a5,
-            in("x5") a6,
-            options(nostack),
-        );
+/// The public 64-bit-inode `struct stat` layout from the macOS SDK.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Stat {
+    st_dev: i32,
+    st_mode: u16,
+    st_nlink: u16,
+    st_ino: u64,
+    st_uid: u32,
+    st_gid: u32,
+    st_rdev: i32,
+    st_atimespec: Timespec,
+    st_mtimespec: Timespec,
+    st_ctimespec: Timespec,
+    st_birthtimespec: Timespec,
+    st_size: i64,
+    st_blocks: i64,
+    st_blksize: i32,
+    st_flags: u32,
+    st_gen: u32,
+    st_lspare: i32,
+    st_qspare: [i64; 2],
+}
+
+#[repr(C)]
+struct SockaddrIn {
+    len: u8,
+    family: u8,
+    port: [u8; 2],
+    addr: [u8; 4],
+    zero: [u8; 8],
+}
+
+#[repr(C)]
+struct Dirent {
+    d_ino: u64,
+    d_seekoff: i64,
+    d_reclen: u16,
+    d_namlen: u16,
+    d_type: u8,
+    d_name: [u8; 1024],
+}
+
+unsafe extern "C" {
+    #[link_name = "openat"]
+    fn c_openat(dirfd: i32, path: *const u8, flags: i32, ...) -> i32;
+    #[link_name = "fstat"]
+    fn c_fstat(fd: i32, stat: *mut Stat) -> i32;
+    #[link_name = "fstatat"]
+    fn c_fstatat(dirfd: i32, path: *const u8, stat: *mut Stat, flags: i32) -> i32;
+    #[link_name = "unlinkat"]
+    fn c_unlinkat(dirfd: i32, path: *const u8, flags: i32) -> i32;
+    #[link_name = "mkdirat"]
+    fn c_mkdirat(dirfd: i32, path: *const u8, mode: u32) -> i32;
+    #[link_name = "sendfile"]
+    fn c_sendfile(fd: i32, s: i32, offset: i64, len: *mut i64, hdtr: *mut u8, flags: i32) -> i32;
+    #[link_name = "setsockopt"]
+    fn c_setsockopt(fd: i32, level: i32, name: i32, value: *const u8, len: u32) -> i32;
+    #[link_name = "socket"]
+    fn c_socket(domain: i32, ty: i32, protocol: i32) -> i32;
+    #[link_name = "bind"]
+    fn c_bind(fd: i32, addr: *const u8, len: u32) -> i32;
+    #[link_name = "listen"]
+    fn c_listen(fd: i32, backlog: i32) -> i32;
+    #[link_name = "accept"]
+    fn c_accept(fd: i32, addr: *mut u8, len: *mut u32) -> i32;
+    #[link_name = "read"]
+    fn c_read(fd: i32, buf: *mut c_void, count: usize) -> isize;
+    #[link_name = "write"]
+    fn c_write(fd: i32, buf: *const c_void, count: usize) -> isize;
+    #[link_name = "send"]
+    fn c_send(fd: i32, buf: *const u8, len: usize, flags: i32) -> isize;
+    #[link_name = "close"]
+    fn c_close(fd: i32) -> i32;
+    #[link_name = "poll"]
+    fn c_poll(fds: *mut u8, nfds: u32, timeout: i32) -> i32;
+    #[link_name = "fdopendir"]
+    fn c_fdopendir(fd: i32) -> *mut u8;
+    #[link_name = "readdir"]
+    fn c_readdir(dirp: *mut u8) -> *mut Dirent;
+    #[link_name = "closedir"]
+    fn c_closedir(dirp: *mut u8) -> i32;
+    #[link_name = "__error"]
+    fn c_error() -> *mut i32;
+    #[link_name = "_exit"]
+    fn c_exit(code: i32) -> !;
+}
+
+fn last_error() -> Error {
+    unsafe { map_errno(*c_error()) }
+}
+
+fn cvt(result: i32) -> Result<i32> {
+    if result < 0 {
+        Err(last_error())
+    } else {
+        Ok(result)
     }
-    if failed != 0 {
-        Err(map_errno(result as i32))
+}
+
+fn cvt_isize(result: isize) -> Result<usize> {
+    if result < 0 {
+        Err(last_error())
     } else {
         Ok(result as usize)
     }
@@ -116,10 +170,13 @@ fn map_errno(errno: i32) -> Error {
 pub fn sleep_ms(ms: u64) -> Result<()> {
     let timeout = core::cmp::min(ms, i32::MAX as u64) as i32;
     loop {
-        match unsafe { syscall6(POLL, 0, 0, timeout as usize, 0, 0, 0) } {
-            Ok(_) => return Ok(()),
-            Err(Error::Interrupted) => continue,
-            Err(error) => return Err(error),
+        let result = unsafe { c_poll(null_mut(), 0, timeout) };
+        if result >= 0 {
+            return Ok(());
+        }
+        match last_error() {
+            Error::Interrupted => continue,
+            error => return Err(error),
         }
     }
 }
@@ -133,38 +190,23 @@ fn c_path(path: &[u8]) -> Result<[u8; MAX_PATH]> {
     Ok(buffer)
 }
 
-fn open_path(dir_fd: i32, path: &[u8], flags: usize, mode: usize) -> Result<i32> {
+fn open_path(dir_fd: i32, path: &[u8], flags: i32, mode: u32) -> Result<i32> {
     let path = c_path(path)?;
-    unsafe {
-        syscall6(
-            OPENAT,
-            dir_fd as usize,
-            path.as_ptr() as usize,
-            flags,
-            mode,
-            0,
-            0,
-        )
-    }
-    .map(|fd| fd as i32)
+    cvt(unsafe { c_openat(dir_fd, path.as_ptr(), flags, mode) })
 }
 
 /// Open the document root, following symlinks in the root's own path. All
 /// later operations are relative to this fd and use O_NOFOLLOW_ANY.
 pub fn open_root(path: &[u8]) -> Result<i32> {
     let path = c_path(path)?;
-    unsafe {
-        syscall6(
-            OPENAT,
+    cvt(unsafe {
+        c_openat(
             AT_FDCWD,
-            path.as_ptr() as usize,
+            path.as_ptr(),
             O_RDONLY | O_DIRECTORY | O_CLOEXEC,
-            0,
-            0,
-            0,
+            0u32,
         )
-    }
-    .map(|fd| fd as i32)
+    })
 }
 
 /// Split a path into `(parent, basename)`. Parent is `"."` when the path has
@@ -178,33 +220,21 @@ fn split_parent(path: &[u8]) -> (&[u8], &[u8]) {
     }
 }
 
-#[repr(C)]
-struct SockaddrIn {
-    len: u8,
-    family: u8,
-    port: [u8; 2],
-    addr: [u8; 4],
-    zero: [u8; 8],
-}
-
 pub fn socket() -> Result<i32> {
-    let result = unsafe { syscall6(SOCKET, AF_INET, SOCK_STREAM, 0, 0, 0, 0) };
-    Ok(result? as i32)
+    cvt(unsafe { c_socket(AF_INET, SOCK_STREAM, 0) })
 }
 
 pub fn set_reuseaddr(fd: i32) -> Result<()> {
     let one: i32 = 1;
-    unsafe {
-        syscall6(
-            SETSOCKOPT,
-            fd as usize,
+    cvt(unsafe {
+        c_setsockopt(
+            fd,
             SOL_SOCKET,
             SO_REUSEADDR,
-            &one as *const i32 as usize,
+            &one as *const i32 as *const u8,
             4,
-            0,
         )
-    }
+    })
     .map(|_| ())
 }
 
@@ -216,85 +246,40 @@ pub fn bind(fd: i32, addr: SocketAddr) -> Result<()> {
         addr: addr.ip,
         zero: [0; 8],
     };
-    unsafe {
-        syscall6(
-            BIND,
-            fd as usize,
-            &sockaddr as *const SockaddrIn as usize,
-            core::mem::size_of::<SockaddrIn>(),
-            0,
-            0,
-            0,
+    cvt(unsafe {
+        c_bind(
+            fd,
+            &sockaddr as *const SockaddrIn as *const u8,
+            core::mem::size_of::<SockaddrIn>() as u32,
         )
-    }
+    })
     .map(|_| ())
 }
 
 pub fn listen(fd: i32, backlog: u16) -> Result<()> {
-    unsafe { syscall6(LISTEN, fd as usize, backlog as usize, 0, 0, 0, 0) }.map(|_| ())
+    cvt(unsafe { c_listen(fd, backlog as i32) }).map(|_| ())
 }
 
 pub fn accept(fd: i32) -> Result<i32> {
-    let result = unsafe { syscall6(ACCEPT, fd as usize, 0, 0, 0, 0, 0) };
-    Ok(result? as i32)
+    cvt(unsafe { c_accept(fd, null_mut(), null_mut()) })
 }
 
 pub fn read(fd: i32, buf: &mut [u8]) -> Result<usize> {
-    unsafe {
-        syscall6(
-            READ,
-            fd as usize,
-            buf.as_mut_ptr() as usize,
-            buf.len(),
-            0,
-            0,
-            0,
-        )
-    }
+    cvt_isize(unsafe { c_read(fd, buf.as_mut_ptr() as *mut c_void, buf.len()) })
 }
 
 pub fn write(fd: i32, buf: &[u8]) -> Result<usize> {
-    unsafe {
-        syscall6(
-            WRITE,
-            fd as usize,
-            buf.as_ptr() as usize,
-            buf.len(),
-            0,
-            0,
-            0,
-        )
-    }
+    cvt_isize(unsafe { c_write(fd, buf.as_ptr() as *const c_void, buf.len()) })
 }
 
 pub fn send(fd: i32, buf: &[u8]) -> Result<usize> {
-    unsafe {
-        syscall6(
-            SENDTO,
-            fd as usize,
-            buf.as_ptr() as usize,
-            buf.len(),
-            MSG_NOSIGNAL,
-            0,
-            0,
-        )
-    }
+    // SO_NOSIGPIPE is set on accepted streams; no MSG_NOSIGNAL on macOS.
+    cvt_isize(unsafe { c_send(fd, buf.as_ptr(), buf.len(), 0) })
 }
 
 pub fn sendfile(out_fd: i32, in_fd: i32, offset: u64, count: usize) -> Result<usize> {
     let mut length = count as i64;
-    let result = unsafe {
-        syscall6(
-            SENDFILE,
-            in_fd as usize,
-            out_fd as usize,
-            offset as usize,
-            &mut length as *mut i64 as usize,
-            0,
-            0,
-        )
-    };
-    result?;
+    cvt(unsafe { c_sendfile(in_fd, out_fd, offset as i64, &mut length, null_mut(), 0) })?;
     if length < 0 {
         Err(Error::InvalidInput)
     } else {
@@ -306,17 +291,15 @@ pub fn sendfile(out_fd: i32, in_fd: i32, offset: u64, count: usize) -> Result<us
 /// socket instead of touching the process signal mask.
 pub fn configure_stream(fd: i32) -> Result<()> {
     let one: i32 = 1;
-    unsafe {
-        syscall6(
-            SETSOCKOPT,
-            fd as usize,
+    cvt(unsafe {
+        c_setsockopt(
+            fd,
             SOL_SOCKET,
             SO_NOSIGPIPE,
-            &one as *const i32 as usize,
+            &one as *const i32 as *const u8,
             4,
-            0,
         )
-    }
+    })
     .map(|_| ())
 }
 
@@ -337,7 +320,7 @@ pub fn write_fd(fd: i32, buf: &[u8]) {
 }
 
 pub fn close(fd: i32) -> Result<()> {
-    unsafe { syscall6(CLOSE, fd as usize, 0, 0, 0, 0, 0) }.map(|_| ())
+    cvt(unsafe { c_close(fd) }).map(|_| ())
 }
 
 pub fn open(dir_fd: i32, path: &[u8]) -> Result<i32> {
@@ -371,17 +354,7 @@ pub fn create_dir(dir_fd: i32, path: &[u8]) -> Result<()> {
         0,
     )?;
     let name = c_path(name)?;
-    let result = unsafe {
-        syscall6(
-            MKDIRAT,
-            parent_fd as usize,
-            name.as_ptr() as usize,
-            MODE_DIR,
-            0,
-            0,
-            0,
-        )
-    };
+    let result = cvt(unsafe { c_mkdirat(parent_fd, name.as_ptr(), MODE_DIR) });
     let _ = close(parent_fd);
     result.map(|_| ())
 }
@@ -398,111 +371,78 @@ pub fn remove_file(dir_fd: i32, path: &[u8]) -> Result<()> {
         0,
     )?;
     let name = c_path(name)?;
-    let result = unsafe {
-        syscall6(
-            UNLINKAT,
-            parent_fd as usize,
-            name.as_ptr() as usize,
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let result = cvt(unsafe { c_unlinkat(parent_fd, name.as_ptr(), 0) });
     let _ = close(parent_fd);
     result.map(|_| ())
 }
 
-pub fn getdents(fd: i32, buf: &mut [u8]) -> Result<usize> {
-    let mut base: i64 = 0;
-    unsafe {
-        syscall6(
-            GETDIRENTRIES64,
-            fd as usize,
-            buf.as_mut_ptr() as usize,
-            buf.len(),
-            &mut base as *mut i64 as usize,
-            0,
-            0,
-        )
+pub fn dir_open(fd: i32) -> Result<*mut u8> {
+    let dirp = unsafe { c_fdopendir(fd) };
+    if dirp.is_null() {
+        Err(last_error())
+    } else {
+        Ok(dirp)
     }
 }
 
-/// Decode one 64-bit `struct dirent` record at `pos`.
-/// Returns `(name_offset, name_length, record_length, d_type)`.
-pub fn dirent_at(buf: &[u8], pos: usize) -> Option<(usize, usize, usize, u8)> {
-    if pos + 21 > buf.len() {
-        return None;
-    }
-    let record_len = read_u16(buf, pos + 16)? as usize;
-    let name_len = read_u16(buf, pos + 18)? as usize;
-    if record_len < 21 || pos + record_len > buf.len() || 21 + name_len > record_len {
-        return None;
-    }
-    Some((pos + 21, name_len, record_len, buf[pos + 20]))
+pub fn dir_close(dirp: *mut u8) -> Result<()> {
+    cvt(unsafe { c_closedir(dirp) }).map(|_| ())
 }
 
-fn read_u16(buf: &[u8], at: usize) -> Option<u16> {
-    if at + 2 > buf.len() {
-        return None;
+/// Read one entry into `name`; returns `(name_len, d_type)`.
+pub fn next_dir(dirp: *mut u8, name: &mut [u8]) -> Result<Option<(usize, u8)>> {
+    loop {
+        // readdir signals end-of-directory with a null return and errno 0,
+        // so clear errno first instead of trusting a stale value.
+        unsafe { *c_error() = 0 };
+        let entry = unsafe { c_readdir(dirp) };
+        if entry.is_null() {
+            let errno = unsafe { *c_error() };
+            if errno == 0 {
+                return Ok(None);
+            }
+            let error = map_errno(errno);
+            if error == Error::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        let entry = unsafe { &*entry };
+        let name_len = entry.d_namlen as usize;
+        if name_len > name.len() {
+            return Err(Error::InvalidInput);
+        }
+        name[..name_len].copy_from_slice(&entry.d_name[..name_len]);
+        return Ok(Some((name_len, entry.d_type)));
     }
-    Some(unsafe { read_unaligned(buf.as_ptr().add(at) as *const u16) })
 }
 
-#[repr(C, align(8))]
-struct StatBuffer([u8; STAT_BUFFER_SIZE]);
-
-fn parse_stat(buffer: &StatBuffer) -> FileInfo {
-    let mode =
-        unsafe { read_unaligned(buffer.0.as_ptr().add(STAT_MODE_OFFSET) as *const u16) as u32 };
-    let size = unsafe { read_unaligned(buffer.0.as_ptr().add(STAT_SIZE_OFFSET) as *const i64) };
-    let mtime = unsafe { read_unaligned(buffer.0.as_ptr().add(STAT_MTIME_OFFSET) as *const i64) };
+fn stat_to_info(stat: &Stat) -> FileInfo {
     FileInfo {
-        len: if size < 0 { 0 } else { size as u64 },
-        is_dir: mode & S_IFMT == S_IFDIR,
-        mtime,
+        len: if stat.st_size < 0 {
+            0
+        } else {
+            stat.st_size as u64
+        },
+        is_dir: stat.st_mode & S_IFMT == S_IFDIR,
+        mtime: stat.st_mtimespec.tv_sec,
     }
 }
 
 pub fn fstat(fd: i32) -> Result<FileInfo> {
-    let mut buffer = StatBuffer([0; STAT_BUFFER_SIZE]);
-    unsafe {
-        syscall6(
-            FSTAT,
-            fd as usize,
-            buffer.0.as_mut_ptr() as usize,
-            0,
-            0,
-            0,
-            0,
-        )
-    }?;
-    Ok(parse_stat(&buffer))
+    let mut stat = Stat::default();
+    cvt(unsafe { c_fstat(fd, &mut stat) })?;
+    Ok(stat_to_info(&stat))
 }
 
 pub fn fstat_at(dir_fd: i32, name: &[u8], nofollow: bool) -> Result<FileInfo> {
     let path = c_path(name)?;
     let flags = if nofollow { AT_SYMLINK_NOFOLLOW } else { 0 };
-    let mut buffer = StatBuffer([0; STAT_BUFFER_SIZE]);
-    unsafe {
-        syscall6(
-            FSTATAT,
-            dir_fd as usize,
-            path.as_ptr() as usize,
-            buffer.0.as_mut_ptr() as usize,
-            flags,
-            0,
-            0,
-        )
-    }?;
-    Ok(parse_stat(&buffer))
+    let mut stat = Stat::default();
+    cvt(unsafe { c_fstatat(dir_fd, path.as_ptr(), &mut stat, flags) })?;
+    Ok(stat_to_info(&stat))
 }
 
 pub fn exit(code: i32) -> ! {
-    unsafe {
-        let _ = syscall6(EXIT, code as usize, 0, 0, 0, 0, 0);
-    }
-    loop {
-        core::hint::spin_loop();
-    }
+    unsafe { c_exit(code) }
 }

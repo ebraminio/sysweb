@@ -27,9 +27,21 @@ Darwin)
     otool -L "$binary"
     deps="$(otool -L "$binary" | tail -n +2 | awk '{print $1}' | sed '/^$/d')"
     [ "$deps" = "/usr/lib/libSystem.B.dylib" ] || fail "unexpected dylib dependencies: $deps"
-    if nm -u "$binary" 2>/dev/null | grep -q .; then
-        fail "undefined symbols found (macOS)"
-    fi
+
+    # The libSystem ABI is the stable macOS interface. Allowlist exactly the
+    # functions this backend calls (plus dyld's stub binder).
+    allowed=" __error _exit accept bind close closedir fdopendir fstat fstatat listen mkdirat openat poll read readdir send sendfile setsockopt socket unlinkat write dyld_stub_binder "
+    imports="$(nm -u "$binary" 2>/dev/null || true)"
+    [ -n "$imports" ] || fail "no libSystem imports found (unexpected)"
+    for symbol in $imports; do
+        name="${symbol#_}"
+        case " $allowed " in
+        *" $name "*) ;;
+        *) fail "unexpected macOS import: $symbol" ;;
+        esac
+    done
+    echo "macOS imports (allowlisted libSystem ABI):"
+    printf '%s\n' "$imports"
     ;;
 Linux)
     echo "--- ELF"
@@ -49,4 +61,4 @@ Linux)
     ;;
 esac
 
-echo "check-binary: OK (no external runtime dependencies, no undefined symbols)"
+echo "check-binary: OK (dependency and ABI checks passed)"

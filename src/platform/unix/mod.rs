@@ -49,6 +49,35 @@ impl Sys {
             Ok(self.root_fd)
         }
     }
+
+    fn dir_entry(&mut self, dir_fd: i32, entry_name: &[u8], dtype: u8) -> Result<Option<DirEntry>> {
+        let mut kind = match dtype {
+            DT_DIR => EntryKind::Dir,
+            DT_REG => EntryKind::File,
+            DT_LNK => EntryKind::Symlink,
+            _ => EntryKind::Other,
+        };
+        let info =
+            abi::fstat_at(dir_fd, entry_name, kind == EntryKind::Symlink).unwrap_or(FileInfo {
+                len: 0,
+                is_dir: false,
+                mtime: 0,
+            });
+        if kind == EntryKind::Other {
+            kind = if info.is_dir {
+                EntryKind::Dir
+            } else {
+                EntryKind::File
+            };
+        }
+
+        Ok(Some(DirEntry {
+            name_len: entry_name.len(),
+            kind,
+            len: info.len,
+            mtime: info.mtime,
+        }))
+    }
 }
 
 impl Default for Sys {
@@ -79,8 +108,13 @@ pub struct File {
 
 pub struct Dir {
     fd: i32,
+    #[cfg(target_os = "macos")]
+    dirp: *mut u8,
+    #[allow(dead_code)]
     buffer: [u8; DIR_BUFFER],
+    #[allow(dead_code)]
     len: usize,
+    #[allow(dead_code)]
     pos: usize,
 }
 
@@ -104,7 +138,18 @@ impl Drop for File {
 
 impl Drop for Dir {
     fn drop(&mut self) {
-        let _ = abi::close(self.fd);
+        #[cfg(target_os = "macos")]
+        {
+            if self.dirp.is_null() {
+                let _ = abi::close(self.fd);
+            } else {
+                let _ = abi::dir_close(self.dirp);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = abi::close(self.fd);
+        }
     }
 }
 
@@ -224,12 +269,33 @@ impl Platform for Sys {
             match abi::open_dir(self.root()?, path) {
                 Err(Error::Interrupted) => continue,
                 Ok(fd) => {
-                    return Ok(Dir {
-                        fd,
-                        buffer: [0; DIR_BUFFER],
-                        len: 0,
-                        pos: 0,
-                    })
+                    #[cfg(target_os = "macos")]
+                    {
+                        match abi::dir_open(fd) {
+                            Ok(dirp) => {
+                                return Ok(Dir {
+                                    fd,
+                                    dirp,
+                                    buffer: [0; DIR_BUFFER],
+                                    len: 0,
+                                    pos: 0,
+                                })
+                            }
+                            Err(error) => {
+                                let _ = abi::close(fd);
+                                return Err(error);
+                            }
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        return Ok(Dir {
+                            fd,
+                            buffer: [0; DIR_BUFFER],
+                            len: 0,
+                            pos: 0,
+                        });
+                    }
                 }
                 Err(error) => return Err(error),
             }
@@ -237,63 +303,60 @@ impl Platform for Sys {
     }
 
     fn next_dir(&mut self, dir: &mut Self::Dir, name: &mut [u8]) -> Result<Option<DirEntry>> {
-        loop {
-            if dir.pos == dir.len {
-                let count = loop {
-                    match abi::getdents(dir.fd, &mut dir.buffer) {
+        #[cfg(target_os = "macos")]
+        {
+            loop {
+                let entry = loop {
+                    match abi::next_dir(dir.dirp, name) {
                         Err(Error::Interrupted) => continue,
                         other => break other?,
                     }
                 };
-                if count == 0 {
+                let Some((name_len, dtype)) = entry else {
                     return Ok(None);
+                };
+                let entry_name = &name[..name_len];
+                if name_len == 0 || entry_name == b"." || entry_name == b".." {
+                    continue;
                 }
-                dir.len = count;
-                dir.pos = 0;
+                return self.dir_entry(dir.fd, entry_name, dtype);
             }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            loop {
+                if dir.pos == dir.len {
+                    let count = loop {
+                        match abi::getdents(dir.fd, &mut dir.buffer) {
+                            Err(Error::Interrupted) => continue,
+                            other => break other?,
+                        }
+                    };
+                    if count == 0 {
+                        return Ok(None);
+                    }
+                    dir.len = count;
+                    dir.pos = 0;
+                }
 
-            let (name_off, name_len, reclen, dtype) =
-                match abi::dirent_at(&dir.buffer[..dir.len], dir.pos) {
-                    Some(entry) => entry,
-                    None => return Err(Error::InvalidInput),
-                };
-            dir.pos += reclen;
+                let (name_off, name_len, reclen, dtype) =
+                    match abi::dirent_at(&dir.buffer[..dir.len], dir.pos) {
+                        Some(entry) => entry,
+                        None => return Err(Error::InvalidInput),
+                    };
+                dir.pos += reclen;
 
-            if name_len > name.len() {
-                return Err(Error::InvalidInput);
+                if name_len > name.len() {
+                    return Err(Error::InvalidInput);
+                }
+                name[..name_len].copy_from_slice(&dir.buffer[name_off..name_off + name_len]);
+                let entry_name = &name[..name_len];
+                if entry_name == b"." || entry_name == b".." || name_len == 0 {
+                    continue;
+                }
+
+                return self.dir_entry(dir.fd, entry_name, dtype);
             }
-            name[..name_len].copy_from_slice(&dir.buffer[name_off..name_off + name_len]);
-            let entry_name = &name[..name_len];
-            if entry_name == b"." || entry_name == b".." || name_len == 0 {
-                continue;
-            }
-
-            let mut kind = match dtype {
-                DT_DIR => EntryKind::Dir,
-                DT_REG => EntryKind::File,
-                DT_LNK => EntryKind::Symlink,
-                _ => EntryKind::Other,
-            };
-            let info =
-                abi::fstat_at(dir.fd, entry_name, kind == EntryKind::Symlink).unwrap_or(FileInfo {
-                    len: 0,
-                    is_dir: false,
-                    mtime: 0,
-                });
-            if kind == EntryKind::Other {
-                kind = if info.is_dir {
-                    EntryKind::Dir
-                } else {
-                    EntryKind::File
-                };
-            }
-
-            return Ok(Some(DirEntry {
-                name_len,
-                kind,
-                len: info.len,
-                mtime: info.mtime,
-            }));
         }
     }
 
