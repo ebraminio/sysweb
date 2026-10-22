@@ -58,7 +58,7 @@ The current release (milestone 0.5).
 - [x] Default-port fallback when the port is implicit and 8080 is busy.
 - [x] Runtime-tested on a Raspberry Pi 5 (kernel 6.12 aarch64): listings,
       uploads, forms, `sendfile`, symlink denial, aborted transfers.
-- [x] Demonstrated: 100,592-byte macOS binary with only allowlisted libSystem
+- [x] Demonstrated: 100,608-byte macOS binary with only allowlisted libSystem
       imports; 57,488-byte (x86_64) and 66,248-byte (aarch64) static Linux ELFs
       with no dynamic section.
 

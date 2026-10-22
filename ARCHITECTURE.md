@@ -134,7 +134,7 @@ Design notes:
 - **Liveness over throughput.** A stalled blocking server is acceptable; a
   permanent exit on transient pressure is not. `accept` retries
   `EMFILE`/`ENFILE`, `ECONNABORTED`, `ECONNRESET`, and `EAGAIN` after a 100 ms
-  `sleep_ms` (Linux `nanosleep`, macOS `poll(NULL, 0, ms)`) instead of exiting.
+  `sleep_ms` (libSystem `nanosleep` on macOS) instead of exiting.
   Fatal listener errors still terminate; there is no supervisor yet.
 - **Size budget.** Binary size is a design constraint, not an afterthought.
   CI and the release workflow enforce 112 KiB on macOS arm64, 64 KiB on Linux

@@ -216,7 +216,7 @@ On macOS, after `cargo build --release`:
 
 ```console
 $ ls -l target/release/syswebd
--rwxr-xr-x  100592  target/release/syswebd
+-rwxr-xr-x  100608  target/release/syswebd
 
 $ otool -L target/release/syswebd
 target/release/syswebd:
@@ -249,7 +249,7 @@ Current stripped sizes from this workspace:
 
 | Target | Size | Budget |
 | --- | ---: | ---: |
-| macOS arm64 | 100,592 B | 112 KiB |
+| macOS arm64 | 100,608 B | 112 KiB |
 | Linux x86_64 | 57,488 B | 64 KiB |
 | Linux aarch64 | 66,248 B | 72 KiB |
 
