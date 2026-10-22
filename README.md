@@ -139,6 +139,19 @@ curl -X PUT http://127.0.0.1:8080/files/notes/
 curl -T ./new.txt http://127.0.0.1:8080/files/report.txt
 ```
 
+For older Windows/PowerShell environments, `System.Net.WebClient` also works.
+`UploadFile` sends multipart `POST`, so `--upload` must be enabled:
+
+```powershell
+$f = "C:\exe.exe"
+$w = New-Object System.Net.WebClient
+$w.UploadFile("http://127.0.0.1:8080/files/exe.exe", $f)
+```
+
+The `X-Filename` header sometimes used with this pattern is not required:
+sysweb takes the destination from the URL path, or the multipart filename
+when the URL ends in `/`.
+
 The built-in index always contains a plain HTML form
 (`method=post enctype=multipart/form-data`). Modern JavaScript hides it after
 detecting the File API and shows the drag/drop tools; a browser with
