@@ -33,12 +33,24 @@ EXIT=0
 
 Notes from making it load:
 
-- Do **not** use `-static` together with `-nostdlib` for the GNU PE link; the
-  resulting image failed with `STATUS_INVALID_IMAGE_FORMAT`.
-- A PE subsystem version of `10.0` also failed on the test machine; `6.0` is
-  the tested loader floor. The Windows 10 API floor is unaffected.
-- Keep the relocation section. Fixed-address/no-reloc experiments were the
-  other source of `STATUS_INVALID_IMAGE_FORMAT`.
+- The actual `STATUS_INVALID_IMAGE_FORMAT` cause was the PE subsystem version:
+  `10.0` failed on the test machine, while `6.0` works. The Windows 10 API floor
+  is unaffected.
+- With subsystem `6.0`, all of these were retested and run:
+  - normal relocation section
+  - `-static` + `-nostdlib`
+  - fixed base + no relocation section
+  - `-static` + fixed/no-reloc
+- A remote MSVC build of the same C probe also ran with:
+
+  ```bat
+  link /NODEFAULTLIB /SUBSYSTEM:CONSOLE,6.0 /ENTRY:start ^
+       /FIXED /DYNAMICBASE:NO /OPT:REF /OPT:ICF ^
+       msvcspike.obj kernel32.lib
+  ```
+
+  So `/FIXED` is not a toolchain limitation. The Rust spike keeps the default
+  relocation section because it is more robust; fixed-base is optional.
 
 The real Windows backend remains the IOCP/async backend. This spike only
 de-risks the entry point, linker flags, and import table.
