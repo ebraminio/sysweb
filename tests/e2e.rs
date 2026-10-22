@@ -128,6 +128,19 @@ fn get(port: u16, target: &str) -> Vec<u8> {
     request(port, raw.as_bytes())
 }
 
+fn request_split(port: u16, head: &str, body: &[u8]) -> Vec<u8> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("read timeout");
+    stream.write_all(head.as_bytes()).expect("headers");
+    std::thread::sleep(Duration::from_millis(50));
+    stream.write_all(body).expect("body");
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).expect("read response");
+    response
+}
+
 fn get_range(port: u16, target: &str, range: &str) -> Vec<u8> {
     let raw = format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nRange: {range}\r\n\r\n");
     request(port, raw.as_bytes())
@@ -441,6 +454,21 @@ fn no_index_is_403_but_static_index_is_still_served() {
     let (head, _) = split(&response);
     assert_status(&head, "HTTP/1.1 405 Method Not Allowed");
     assert_eq!(header(&head, "Allow"), Some("GET, HEAD"));
+
+    // Regression: send the body after the headers so the server must drain it
+    // before closing. Closing with unread input can reset the connection on
+    // macOS and discard the 405 response.
+    let head = "PUT /assets/new.txt HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n\r\n";
+    let response = request_split(port, head, b"nope");
+    assert_status(&split(&response).0, "HTTP/1.1 405 Method Not Allowed");
+
+    let body = multipart_body("splitnoindex", "x.txt", b"x");
+    let head = format!(
+        "POST /assets/ HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=splitnoindex\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let response = request_split(port, &head, &body);
+    assert_status(&split(&response).0, "HTTP/1.1 405 Method Not Allowed");
 }
 
 #[test]
