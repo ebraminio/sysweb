@@ -148,8 +148,8 @@ the part; a post to `/files/fixed.txt` uses the URL path instead.
 
 The server answers `201 Created` on uploads and folder creation, `409 Conflict`
 when a file exists without `--replace`, `411 Length Required` when a file
-upload has no `Content-Length`, `415 Unsupported Media Type` for a non-multipart
-form post, and `413 Payload Too Large` above the 1 GiB limit.
+upload has no `Content-Length`, and `415 Unsupported Media Type` for a
+non-multipart form post. There is no per-request upload size cap.
 
 ## CLI
 
@@ -182,10 +182,12 @@ only when you mean it; this server has no TLS, authentication, or rate limiting.
 - `index.html` is served when present; otherwise a built-in directory index;
 - directory index with names, sizes, modification times, types, breadcrumbs,
   sortable columns, and a parent link;
-- a self-contained browser UI with drag-and-drop upload, progress, and folder
+- a self-contained browser UI with file/folder upload (`webkitdirectory`,
+  preserving relative paths), drag-and-drop file upload, progress, and folder
   creation, inlined into a fixed 64 KiB buffer;
-- raw-body `PUT` uploads with `Content-Length`, `Expect: 100-continue`, a 1 GiB
-  cap, exact streaming (no heap), and cleanup of failed partial files;
+- raw-body `PUT` uploads with `Content-Length`, `Expect: 100-continue`, no
+  per-request size cap, exact streaming (no heap), and cleanup of failed
+  partial files;
 - classic `multipart/form-data` `POST` uploads for old browsers, parsed by a
   streaming state machine with a 32 KiB buffer and no whole-body buffering;
   the inline JS stays in an ES3-style, feature-detected subset (no `Promise`,
@@ -362,7 +364,8 @@ This is a milestone, not a hardened internet-facing server:
   current suites target crashes, resets, containment, and liveness, not
   throughput or latency under concurrency;
 - `Connection: close` only; no keep-alive or pipelining;
-- uploads are off by default, capped at 1 GiB, and have no auth or quota;
+- uploads are off by default and have no auth, quota, or per-request size cap;
+  disk exhaustion is the operator's responsibility;
 - classic form posts upload one file per request; `filename*` (RFC 5987) and
   multi-file form fields are not parsed yet;
 - old browsers get a hard-coded light CSS base; modern

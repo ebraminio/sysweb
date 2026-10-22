@@ -73,15 +73,15 @@ Out of scope for 0.1:
 - **Bounded multipart forms.** Classic `POST` forms use a streaming parser with
   a 32 KiB buffer; filenames are reduced to a basename and reject separators,
   controls, NUL, `.` and `..`; only one file part is accepted; non-file fields
-  are discarded; the 1 GiB cap still applies.
+  are discarded. There is no per-request size cap.
 - **Read-only by default.** Files are opened `O_RDONLY`; uploads and folder
   creation require `--upload`, and overwriting requires `--replace`.
 - **No symlinks beneath the document root.** Linux uses `openat2` with
   `RESOLVE_NO_SYMLINKS`; macOS uses `O_NOFOLLOW_ANY`. Every operation is
   relative to a document-root fd opened once at startup. Symlinks are rendered
   as unlinked `link` rows in the index.
-- **Bounded uploads.** `Content-Length` is mandatory for file uploads, chunked
-  bodies are rejected, and bodies above 1 GiB are 413 before reading.
+- **Streaming uploads.** `Content-Length` is mandatory for file uploads and
+  chunked bodies are rejected, but there is no fixed per-request size cap.
 - **Failed uploads are unlinked.** A partial file is removed after early EOF or
   a write error, so it is not served later.
 - **Index output is escaped.** Names are HTML-escaped in text/attributes and
@@ -145,8 +145,8 @@ enable uploads on a machine where arbitrary local web content is a concern.
 
 ### Disk exhaustion
 
-The 1 GiB per-request cap is not a disk quota. Repeated uploads can fill the
-filesystem. Use a dedicated filesystem/quota and monitor free space.
+There is no per-request upload cap. A single upload or repeated uploads can fill
+the filesystem. Use a dedicated filesystem/quota and monitor free space.
 
 ### `--replace` is destructive
 

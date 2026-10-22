@@ -347,8 +347,8 @@ parser:
   `/`, `\`, `.` and `..` are rejected; names are capped at 255 bytes;
 - non-file fields are streamed and discarded; exactly one file part is
   accepted per request (the classic form fallback has one input);
-- file bytes are handed to the `Sink` as they are confirmed, so the 1 GiB cap
-  is enforced without allocating;
+- file bytes are handed to the `Sink` as they are confirmed, so there is no
+  whole-body buffer and no fixed size cap;
 - a failed or truncated part is unlinked by the sink;
 - the directory page always includes a form with
   `method=post enctype=multipart/form-data`; modern JS detects the File API,
@@ -392,8 +392,8 @@ works without special-casing.
 `PUT` is deliberately a raw-body protocol; classic forms use the separate
 bounded multipart `POST` path:
 
-- `Content-Length` is mandatory for file uploads (411 otherwise), and bodies
-  above 1 GiB are rejected with 413 before reading;
+- `Content-Length` is mandatory for file uploads (411 otherwise); the body is
+  streamed until exactly that many bytes have been read, with no fixed cap;
 - bytes already buffered after the header block are written first, then the
   socket is streamed in 16 KiB chunks;
 - `Expect: 100-continue` is answered only when the body is not already
@@ -459,8 +459,8 @@ macOS path.
   called with a path containing a `..` segment. All symlinks beneath the root
   are refused by `openat2`/`O_NOFOLLOW_ANY`; only the root's own path may
   contain symlinks.
-- Uploads require a `Content-Length`, never exceed 1 GiB, and stop after
-  exactly that many bytes. A failed upload is unlinked.
+- Uploads require a `Content-Length` and stop after exactly that many bytes;
+  there is no per-request cap. A failed upload is unlinked.
 - Directory HTML is escaped for text/attributes and percent-encoded for URLs;
   names cannot inject markup or `javascript:` links.
 - Response headers contain static strings, decimal numbers, and a
@@ -608,7 +608,7 @@ several.
   HEAD, binary bodies, `sendfile` for an 8 MiB file, `Range`/`206`/`416`,
   directory indexes,
   breadcrumbs/metadata, HTML escaping, symlink denial, 301 redirects,
-  404/405/505/400/409/411/413/415, `--no-index`, raw uploads, folder creation,
+  404/405/505/400/409/411/415, `--no-index`, raw uploads, folder creation,
   `--replace`, missing length, `Expect: 100-continue`, traversal attempts, and
   classic multipart form uploads (including a 100 KiB chunked body).
 - CI runs `cargo test` and `cargo test --release` on Linux and macOS. The

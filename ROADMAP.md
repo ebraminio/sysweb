@@ -25,13 +25,13 @@ The current release (milestone 0.5).
 - [x] Static files, `index.html`, MIME table, `sendfile`, single-range 206/416.
 - [x] Built-in directory index with metadata, breadcrumbs, sorting, and a
       self-contained 64 KiB HTML/CSS/JS page.
-- [x] Opt-in raw `PUT` uploads, folder creation, `--replace`, 1 GiB cap, and
-      failed-upload cleanup.
+- [x] Opt-in raw `PUT` uploads, folder creation, `--replace`, no per-request
+      size cap, and failed-upload cleanup.
 - [x] `301` from `/dir` to `/dir/`; `--no-index` mode.
 - [x] HTML escaping and URL encoding for listing entries; all symlinks
       beneath the root denied.
 - [x] Percent-decoding, dot-segment normalization, traversal rejection.
-- [x] 201/301/400/403/404/405/409/411/413/414/431/500/505 responses.
+- [x] 201/301/400/403/404/405/409/411/414/431/500/505 responses.
 - [x] `Content-Length`, `Content-Type`, `Server`, `Connection: close`.
 - [x] IPv4 bind, CLI (`--root`, `--port`, `--host`, `--backlog`, `--upload`,
       `--replace`, `--no-index`, `--quiet`).

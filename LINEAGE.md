@@ -113,8 +113,9 @@ contains a `<noscript>` multipart form for browsers without JavaScript.
   TLS at a reverse proxy.
 - **Silent write access.** pad.js was convenience-first; sysweb defaults to
   read-only and loopback. `--upload` is an explicit decision.
-- **Unbounded request bodies.** Raw uploads are capped at 1 GiB and require
-  `Content-Length`; chunked bodies are rejected.
+- **Unbounded request bodies.** Raw uploads require `Content-Length` and have
+  no fixed cap; chunked bodies are rejected. Disk quotas belong to the
+  operator/reverse proxy.
 - **Multipart as the primary protocol.** It is supported only as a bounded
   compatibility path (one file per request), not as the main wire format.
 

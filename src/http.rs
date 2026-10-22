@@ -238,7 +238,6 @@ pub enum Status {
     RangeNotSatisfiable,
     Conflict,
     LengthRequired,
-    PayloadTooLarge,
     UriTooLong,
     RequestHeaderFieldsTooLarge,
     InternalServerError,
@@ -260,7 +259,6 @@ impl Status {
             Status::RangeNotSatisfiable => 416,
             Status::Conflict => 409,
             Status::LengthRequired => 411,
-            Status::PayloadTooLarge => 413,
             Status::UriTooLong => 414,
             Status::RequestHeaderFieldsTooLarge => 431,
             Status::InternalServerError => 500,
@@ -282,7 +280,6 @@ impl Status {
             Status::RangeNotSatisfiable => b"Range Not Satisfiable",
             Status::Conflict => b"Conflict",
             Status::LengthRequired => b"Length Required",
-            Status::PayloadTooLarge => b"Payload Too Large",
             Status::UriTooLong => b"URI Too Long",
             Status::RequestHeaderFieldsTooLarge => b"Request Header Fields Too Large",
             Status::InternalServerError => b"Internal Server Error",
@@ -303,7 +300,6 @@ impl Status {
             Status::RangeNotSatisfiable => b"416 Range Not Satisfiable\n",
             Status::Conflict => b"409 Conflict\n",
             Status::LengthRequired => b"411 Length Required\n",
-            Status::PayloadTooLarge => b"413 Payload Too Large\n",
             Status::UriTooLong => b"414 URI Too Long\n",
             Status::RequestHeaderFieldsTooLarge => b"431 Request Header Fields Too Large\n",
             Status::InternalServerError => b"500 Internal Server Error\n",
@@ -439,7 +435,6 @@ mod tests {
         assert_eq!(Status::Conflict.code(), 409);
         assert_eq!(Status::UnsupportedMediaType.code(), 415);
         assert_eq!(Status::LengthRequired.code(), 411);
-        assert_eq!(Status::PayloadTooLarge.code(), 413);
         assert_eq!(Status::PartialContent.code(), 206);
         assert_eq!(Status::RangeNotSatisfiable.code(), 416);
         assert_eq!(Status::RequestHeaderFieldsTooLarge.code(), 431);

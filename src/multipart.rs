@@ -34,7 +34,6 @@ pub trait Sink {
 pub enum ParseError {
     UnsupportedContentType,
     Malformed,
-    TooLarge,
     NoFile,
     Sink(SinkError),
 }
@@ -54,14 +53,12 @@ pub struct Parser {
     state: State,
     buffer: [u8; BUFFER],
     len: usize,
-    total: u64,
-    max_total: u64,
     files: usize,
     writing: bool,
 }
 
 impl Parser {
-    pub fn new(content_type: &[u8], max_total: u64) -> Result<Self, ParseError> {
+    pub fn new(content_type: &[u8]) -> Result<Self, ParseError> {
         let (boundary, boundary_len) = parse_boundary(content_type)?;
         let mut delimiter = [0u8; MAX_BOUNDARY + 4];
         delimiter[..4].copy_from_slice(b"\r\n--");
@@ -75,8 +72,6 @@ impl Parser {
             state: State::Preamble,
             buffer: [0; BUFFER],
             len: 0,
-            total: 0,
-            max_total,
             files: 0,
             writing: false,
         })
@@ -88,17 +83,10 @@ impl Parser {
             if matches!(self.state, State::Epilogue) {
                 return Ok(());
             }
-            if self.len == BUFFER {
-                return Err(ParseError::TooLarge);
-            }
             let space = BUFFER - self.len;
             let take = core::cmp::min(space, data.len());
             self.buffer[self.len..self.len + take].copy_from_slice(&data[..take]);
             self.len += take;
-            self.total += take as u64;
-            if self.total > self.max_total {
-                return Err(ParseError::TooLarge);
-            }
             data = &data[take..];
             self.process(sink)?;
         }
@@ -458,8 +446,7 @@ mod tests {
     fn parses_one_file_in_one_chunk() {
         let boundary = b"----sysweb";
         let payload = body(boundary, b"old.txt", b"hello form");
-        let mut parser =
-            Parser::new(b"multipart/form-data; boundary=----sysweb", 1024 * 1024).unwrap();
+        let mut parser = Parser::new(b"multipart/form-data; boundary=----sysweb").unwrap();
         let mut sink = Collector::default();
         parser.feed(&payload, &mut sink).unwrap();
         parser.finish(&mut sink).unwrap();
@@ -472,8 +459,7 @@ mod tests {
         let boundary = b"----sysweb";
         let content: Vec<u8> = (0..100_000).map(|i| (i % 251) as u8).collect();
         let payload = body(boundary, b"C:\\fakepath\\big.bin", &content);
-        let mut parser =
-            Parser::new(b"multipart/form-data; boundary=----sysweb", 1024 * 1024).unwrap();
+        let mut parser = Parser::new(b"multipart/form-data; boundary=----sysweb").unwrap();
         let mut sink = Collector::default();
         for chunk in payload.chunks(17) {
             parser.feed(chunk, &mut sink).unwrap();
@@ -495,7 +481,7 @@ mod tests {
         payload.extend_from_slice(&[0u8, 1, 2, b'\r', b'\n']);
         payload.extend_from_slice(b"\r\n--b--\r\n");
 
-        let mut parser = Parser::new(b"multipart/form-data; boundary=b", 1024).unwrap();
+        let mut parser = Parser::new(b"multipart/form-data; boundary=b").unwrap();
         let mut sink = Collector::default();
         parser.feed(&payload, &mut sink).unwrap();
         parser.finish(&mut sink).unwrap();
@@ -504,7 +490,7 @@ mod tests {
 
     #[test]
     fn rejects_truncated_and_missing_boundary() {
-        let mut parser = Parser::new(b"multipart/form-data; boundary=abc", 1024).unwrap();
+        let mut parser = Parser::new(b"multipart/form-data; boundary=abc").unwrap();
         let mut sink = Collector::default();
         parser
             .feed(
@@ -521,7 +507,7 @@ mod tests {
         assert_eq!(&boundary[..len], b"a b");
 
         let payload = body(b"a b", b"a;b.txt", b"quoted semicolon");
-        let mut parser = Parser::new(b"multipart/form-data; boundary=\"a b\"", 1024).unwrap();
+        let mut parser = Parser::new(b"multipart/form-data; boundary=\"a b\"").unwrap();
         let mut sink = Collector::default();
         parser.feed(&payload, &mut sink).unwrap();
         parser.finish(&mut sink).unwrap();
@@ -534,7 +520,7 @@ mod tests {
         let mut long = [b'a'; MAX_FILENAME + 1];
         long[0] = b'a';
         let payload = body(b"b", &long, b"x");
-        let mut parser = Parser::new(b"multipart/form-data; boundary=b", 1024).unwrap();
+        let mut parser = Parser::new(b"multipart/form-data; boundary=b").unwrap();
         let mut sink = Collector::default();
         parser.feed(&payload, &mut sink).unwrap();
         assert!(parser.finish(&mut sink).is_err());

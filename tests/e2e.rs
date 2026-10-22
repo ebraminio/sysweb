@@ -533,13 +533,6 @@ fn uploads_create_files_and_directories() {
     );
     assert_status(&split(&response).0, "HTTP/1.1 411 Length Required");
 
-    // A too-large Content-Length is rejected before reading a body.
-    let response = request(
-        port,
-        b"PUT /assets/too-large.bin HTTP/1.1\r\nHost: x\r\nContent-Length: 1073741825\r\n\r\n",
-    );
-    assert_status(&split(&response).0, "HTTP/1.1 413 Payload Too Large");
-
     // Binary bodies round-trip exactly.
     let binary: Vec<u8> = (0..=255u8).collect();
     let response = put(port, "/assets/binary.dat", &binary);

@@ -14,8 +14,6 @@ const FILE_BUF: usize = 16 * 1024;
 const HEADER_BUF: usize = 4096;
 const LOG_BUF: usize = 1200;
 const LOCATION_BUF: usize = MAX_URL_PATH * 3 + 2;
-const MAX_UPLOAD: u64 = 1 << 30; // 1 GiB
-const MAX_MULTIPART: u64 = MAX_UPLOAD + 1024 * 1024;
 
 const ALLOW_READ: &[u8] = b"GET, HEAD";
 const ALLOW_UPLOAD: &[u8] = b"GET, HEAD, PUT, POST";
@@ -324,11 +322,6 @@ impl<P: Platform> Server<P> {
                 return;
             }
         };
-        if content_length > MAX_MULTIPART {
-            self.drain_request_body(stream, request, raw);
-            self.send_error(stream, Status::PayloadTooLarge, false, b"");
-            return;
-        }
         let content_type = match request.content_type {
             Some(value) => value,
             None => {
@@ -337,16 +330,11 @@ impl<P: Platform> Server<P> {
                 return;
             }
         };
-        let mut parser = match multipart::Parser::new(content_type, MAX_MULTIPART) {
+        let mut parser = match multipart::Parser::new(content_type) {
             Ok(parser) => parser,
             Err(multipart::ParseError::UnsupportedContentType) => {
                 self.drain_request_body(stream, request, raw);
                 self.send_error(stream, Status::UnsupportedMediaType, false, b"");
-                return;
-            }
-            Err(multipart::ParseError::TooLarge) => {
-                self.drain_request_body(stream, request, raw);
-                self.send_error(stream, Status::PayloadTooLarge, false, b"");
                 return;
             }
             Err(_) => {
@@ -458,7 +446,6 @@ impl<P: Platform> Server<P> {
     fn send_multipart_error(&mut self, stream: &mut P::Stream, error: multipart::ParseError) {
         let status = match error {
             multipart::ParseError::UnsupportedContentType => Status::UnsupportedMediaType,
-            multipart::ParseError::TooLarge => Status::PayloadTooLarge,
             multipart::ParseError::NoFile | multipart::ParseError::Malformed => Status::BadRequest,
             multipart::ParseError::Sink(SinkError::Conflict) => Status::Conflict,
             multipart::ParseError::Sink(SinkError::Forbidden) => Status::Forbidden,
@@ -542,12 +529,6 @@ impl<P: Platform> Server<P> {
                 return;
             }
         };
-        if content_length > MAX_UPLOAD {
-            self.drain_request_body(stream, request, raw);
-            self.send_error(stream, Status::PayloadTooLarge, false, b"");
-            return;
-        }
-
         let mut file = match self.platform.create_file(rel_path, self.config.replace()) {
             Ok(file) => file,
             Err(Error::AlreadyExists) | Err(Error::IsADirectory) => {
