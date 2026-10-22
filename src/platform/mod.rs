@@ -6,7 +6,7 @@
 //! the caller.
 //!
 //! The current implementation is blocking. The same trait shape is intended
-//! to grow a reactor (`epoll`/`kqueue`/IOCP) for the async milestone; see
+//! to grow a reactor (`io_uring`/`kqueue`/IOCP) for the async milestone; see
 //! `ARCHITECTURE.md`.
 
 pub mod unix;
@@ -94,25 +94,29 @@ pub trait Platform {
     type File;
     type Dir;
 
+    /// Open the document root once. All later paths are relative to this
+    /// directory, and symlink rules apply only beneath it.
+    fn set_root(&mut self, root: &[u8]) -> Result<()>;
     fn bind(&mut self, addr: SocketAddr, backlog: u16) -> Result<Self::Listener>;
     fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
     fn read(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
     fn write_all(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<()>;
 
-    /// Open `path` (a byte path, no NUL required) read-only.
+    /// Open `path` (relative to the document root) read-only.
     fn open(&mut self, path: &[u8]) -> Result<Self::File>;
     fn file_info(&mut self, file: &Self::File) -> Result<FileInfo>;
     fn read_file(&mut self, file: &mut Self::File, buf: &mut [u8]) -> Result<usize>;
 
-    /// Open a directory for iteration. Symlinks in the final component are
-    /// refused.
+    /// Open a directory (relative to the document root) for iteration.
+    /// Symlinks anywhere beneath the root are refused.
     fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir>;
     /// Copy the next entry name into `name` and return its metadata. Returns
     /// `None` at end-of-directory.
     fn next_dir(&mut self, dir: &mut Self::Dir, name: &mut [u8]) -> Result<Option<DirEntry>>;
 
-    /// Create a file for streaming writes. Existing files are refused unless
-    /// `replace` is true, in which case they are truncated.
+    /// Create a file (relative to the document root) for streaming writes.
+    /// Existing files are refused unless `replace` is true, in which case they
+    /// are truncated.
     fn create_file(&mut self, path: &[u8], replace: bool) -> Result<Self::File>;
     /// Write the whole buffer to a writable file.
     fn write_file(&mut self, file: &mut Self::File, buf: &[u8]) -> Result<()>;

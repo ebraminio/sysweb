@@ -9,13 +9,17 @@ its constraints; please read this before sending a patch.
    or a dependency that requires them in the server binary.
 2. **No third-party runtime crates.** The binary should keep `cargo tree` at a
    single node. Test-only tooling is a discussion, not a default.
-3. **`unsafe` stays at the edges.** New `unsafe` belongs in a syscall/ABI or
+3. **Latest APIs only.** Do not add compatibility fallbacks for older kernels
+   or OS releases. Linux targets `openat2`/`statx`/io_uring, macOS targets
+   `O_NOFOLLOW_ANY`/kqueue, Windows targets IOCP. See the policy in
+   [ARCHITECTURE.md](ARCHITECTURE.md).
+4. **`unsafe` stays at the edges.** New `unsafe` belongs in a syscall/ABI or
    entry module, with a comment stating the invariant. Safe HTTP/path code
    should remain safe.
-4. **Every platform claim needs a command.** If a change says “no libc” or
+5. **Every platform claim needs a command.** If a change says “no libc” or
    “CRT-free”, CI must be able to prove it (`nm -u`, `readelf -d`, `otool -L`,
    `dumpbin /dependents`).
-5. **Release builds are part of testing.** LTO has produced real bugs here
+6. **Release builds are part of testing.** LTO has produced real bugs here
    (`bzero` recursively calling itself). Run both `cargo test` and
    `cargo test --release`.
 

@@ -40,6 +40,11 @@ impl<P: Platform> Server<P> {
     /// Bind, then serve connections forever. Fatal errors terminate the
     /// process; this server intentionally has no supervision layer yet.
     pub fn run(&mut self) -> ! {
+        if self.platform.set_root(self.config.root()).is_err() {
+            self.platform.log(b"syswebd: root open failed\n");
+            self.platform.exit(1)
+        }
+
         let listener = match self
             .platform
             .bind(self.config.addr(), self.config.backlog())
@@ -121,20 +126,8 @@ impl<P: Platform> Server<P> {
             }
         };
 
-        let mut fs_path = [0u8; MAX_PATH];
-        let fs_len = match path::join_dir(self.config.root(), &url_path[..url_len], &mut fs_path) {
-            Ok(len) => len,
-            Err(path::PathError::TooLong) => {
-                self.send_error(stream, Status::UriTooLong, head_only, b"");
-                return;
-            }
-            Err(_) => {
-                self.send_error(stream, Status::BadRequest, head_only, b"");
-                return;
-            }
-        };
-
-        let mut file = match self.platform.open(&fs_path[..fs_len]) {
+        let rel_path = root_relative(&url_path[..url_len]);
+        let mut file = match self.platform.open(rel_path) {
             Ok(file) => file,
             Err(Error::NotFound) | Err(Error::IsADirectory) => {
                 self.send_error(stream, Status::NotFound, head_only, b"");
@@ -159,7 +152,7 @@ impl<P: Platform> Server<P> {
         };
 
         if !info.is_dir {
-            if self.send_file(stream, &mut file, &fs_path[..fs_len], info, head_only) {
+            if self.send_file(stream, &mut file, rel_path, info, head_only) {
                 self.log_request(request.method, &url_path[..url_len], Status::Ok, info.len);
             }
             return;
@@ -178,15 +171,21 @@ impl<P: Platform> Server<P> {
         }
 
         let mut index_path = [0u8; MAX_PATH];
-        let index_len = match path::append_index(&fs_path[..fs_len], &mut index_path) {
-            Ok(len) => len,
-            Err(path::PathError::TooLong) => {
-                self.send_error(stream, Status::UriTooLong, head_only, b"");
-                return;
-            }
-            Err(_) => {
-                self.send_error(stream, Status::BadRequest, head_only, b"");
-                return;
+        let index_len = if url_len == 1 {
+            index_path[..10].copy_from_slice(b"index.html");
+            index_path[10] = 0;
+            10
+        } else {
+            match path::append_index(rel_path, &mut index_path) {
+                Ok(len) => len,
+                Err(path::PathError::TooLong) => {
+                    self.send_error(stream, Status::UriTooLong, head_only, b"");
+                    return;
+                }
+                Err(_) => {
+                    self.send_error(stream, Status::BadRequest, head_only, b"");
+                    return;
+                }
             }
         };
 
@@ -220,7 +219,7 @@ impl<P: Platform> Server<P> {
             }
             Err(Error::NotFound) | Err(Error::IsADirectory) => {
                 if self.config.index() {
-                    self.serve_listing(stream, &url_path[..url_len], &fs_path[..fs_len], head_only);
+                    self.serve_listing(stream, &url_path[..url_len], rel_path, head_only);
                 } else {
                     self.send_error(stream, Status::Forbidden, head_only, b"");
                 }
@@ -305,21 +304,10 @@ impl<P: Platform> Server<P> {
             return;
         }
 
-        let mut fs_path = [0u8; MAX_PATH];
-        let fs_len = match path::join_dir(self.config.root(), &url_path[..url_len], &mut fs_path) {
-            Ok(len) => len,
-            Err(path::PathError::TooLong) => {
-                self.send_error(stream, Status::UriTooLong, false, b"");
-                return;
-            }
-            Err(_) => {
-                self.send_error(stream, Status::BadRequest, false, b"");
-                return;
-            }
-        };
+        let rel_path = root_relative(&url_path[..url_len]);
 
         if url_path[..url_len].ends_with(b"/") {
-            match self.platform.create_dir(&fs_path[..fs_len - 1]) {
+            match self.platform.create_dir(rel_path) {
                 Ok(()) => {
                     if self.send_body(
                         stream,
@@ -366,10 +354,7 @@ impl<P: Platform> Server<P> {
             return;
         }
 
-        let mut file = match self
-            .platform
-            .create_file(&fs_path[..fs_len], self.config.replace())
-        {
+        let mut file = match self.platform.create_file(rel_path, self.config.replace()) {
             Ok(file) => file,
             Err(Error::AlreadyExists) | Err(Error::IsADirectory) => {
                 self.send_error(stream, Status::Conflict, false, b"");
@@ -411,7 +396,7 @@ impl<P: Platform> Server<P> {
             }
             Err(status) => {
                 drop(file);
-                let _ = self.platform.remove_file(&fs_path[..fs_len]);
+                let _ = self.platform.remove_file(rel_path);
                 self.send_error(stream, status, false, b"");
             }
         }
@@ -637,6 +622,16 @@ impl<P: Platform> Server<P> {
         let _ = line.push(status.reason());
         let _ = line.push_byte(b'\n');
         self.platform.log(line.as_slice());
+    }
+}
+
+/// Convert a normalized URL path (`/a/b`) into a path relative to the
+/// document-root fd (`a/b`). The root itself is `"."`.
+fn root_relative(url_path: &[u8]) -> &[u8] {
+    if url_path.len() <= 1 {
+        b"."
+    } else {
+        &url_path[1..]
     }
 }
 

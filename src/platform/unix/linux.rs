@@ -13,7 +13,7 @@ mod nr {
     pub const READ: usize = 0;
     pub const WRITE: usize = 1;
     pub const CLOSE: usize = 3;
-    pub const FSTAT: usize = 5;
+    pub const STATX: usize = 332;
     pub const SOCKET: usize = 41;
     pub const ACCEPT: usize = 43;
     pub const SENDTO: usize = 44;
@@ -22,9 +22,8 @@ mod nr {
     pub const SETSOCKOPT: usize = 54;
     pub const GETDENTS64: usize = 217;
     pub const EXIT_GROUP: usize = 231;
-    pub const OPENAT: usize = 257;
+    pub const OPENAT2: usize = 437;
     pub const MKDIRAT: usize = 258;
-    pub const NEWFSTATAT: usize = 262;
     pub const UNLINKAT: usize = 263;
 }
 
@@ -33,7 +32,7 @@ mod nr {
     pub const READ: usize = 63;
     pub const WRITE: usize = 64;
     pub const CLOSE: usize = 57;
-    pub const FSTAT: usize = 80;
+    pub const STATX: usize = 291;
     pub const SOCKET: usize = 198;
     pub const ACCEPT: usize = 202;
     pub const SENDTO: usize = 206;
@@ -42,9 +41,8 @@ mod nr {
     pub const SETSOCKOPT: usize = 208;
     pub const GETDENTS64: usize = 61;
     pub const EXIT_GROUP: usize = 94;
-    pub const OPENAT: usize = 56;
+    pub const OPENAT2: usize = 437;
     pub const MKDIRAT: usize = 34;
-    pub const NEWFSTATAT: usize = 79;
     pub const UNLINKAT: usize = 35;
 }
 
@@ -57,6 +55,8 @@ const SO_REUSEADDR: usize = 2;
 const MSG_NOSIGNAL: usize = 0x4000;
 const AT_FDCWD: usize = (-100isize) as usize;
 const AT_SYMLINK_NOFOLLOW: usize = 0x100;
+const AT_EMPTY_PATH: usize = 0x1000;
+const STATX_BASIC_STATS: usize = 0x07ff;
 
 const O_RDONLY: usize = 0;
 const O_WRONLY: usize = 1;
@@ -64,19 +64,18 @@ const O_CREAT: usize = 0x40;
 const O_EXCL: usize = 0x80;
 const O_TRUNC: usize = 0x200;
 const O_DIRECTORY: usize = 0x10000;
-const O_NOFOLLOW: usize = 0x20000;
+const O_CLOEXEC: usize = 0x80000;
+const RESOLVE_NO_SYMLINKS: u64 = 0x04;
 const MODE_FILE: usize = 0o644;
 const MODE_DIR: usize = 0o755;
 
-/// `struct stat` offsets, verified against the Linux UAPI for both ABIs.
-/// st_mode is a u32 on Linux, st_size and st_mtime are signed 64-bit values.
-#[cfg(target_arch = "x86_64")]
-const STAT_MODE_OFFSET: usize = 24;
-#[cfg(target_arch = "aarch64")]
-const STAT_MODE_OFFSET: usize = 16;
-const STAT_SIZE_OFFSET: usize = 48;
-const STAT_MTIME_OFFSET: usize = 88;
-const STAT_BUFFER_SIZE: usize = 144;
+/// `struct statx` offsets, verified against the Linux UAPI. We request
+/// `STATX_BASIC_STATS` only; stx_mode is u16, stx_size and stx_mtime.tv_sec are
+/// 64-bit.
+const STATX_MODE_OFFSET: usize = 28;
+const STATX_SIZE_OFFSET: usize = 40;
+const STATX_MTIME_OFFSET: usize = 112;
+const STATX_BUFFER_SIZE: usize = 256;
 const S_IFMT: u32 = 0o170000;
 const S_IFDIR: u32 = 0o040000;
 
@@ -170,10 +169,66 @@ fn c_path(path: &[u8]) -> Result<[u8; MAX_PATH]> {
     Ok(buffer)
 }
 
-fn open_path(path: &[u8], flags: usize, mode: usize) -> Result<i32> {
+#[repr(C)]
+struct OpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
+
+fn open_path(dir_fd: i32, path: &[u8], flags: usize, mode: usize) -> Result<i32> {
     let path = c_path(path)?;
-    let result = unsafe { syscall6(OPENAT, AT_FDCWD, path.as_ptr() as usize, flags, mode, 0, 0) };
+    let how = OpenHow {
+        flags: flags as u64,
+        mode: mode as u64,
+        resolve: RESOLVE_NO_SYMLINKS,
+    };
+    let result = unsafe {
+        syscall6(
+            OPENAT2,
+            dir_fd as usize,
+            path.as_ptr() as usize,
+            &how as *const OpenHow as usize,
+            core::mem::size_of::<OpenHow>(),
+            0,
+            0,
+        )
+    };
     Ok(decode(result)? as i32)
+}
+
+/// Open the document root, following symlinks in the root's own path. All
+/// later operations are relative to this fd and forbid symlinks.
+pub fn open_root(path: &[u8]) -> Result<i32> {
+    let path = c_path(path)?;
+    let how = OpenHow {
+        flags: (O_RDONLY | O_DIRECTORY | O_CLOEXEC) as u64,
+        mode: 0,
+        resolve: 0,
+    };
+    let result = unsafe {
+        syscall6(
+            OPENAT2,
+            AT_FDCWD,
+            path.as_ptr() as usize,
+            &how as *const OpenHow as usize,
+            core::mem::size_of::<OpenHow>(),
+            0,
+            0,
+        )
+    };
+    Ok(decode(result)? as i32)
+}
+
+/// Split a path into `(parent, basename)`. Parent is `"."` when the path has
+/// no separator, and `"/"` for an absolute one-component path.
+fn split_parent(path: &[u8]) -> (&[u8], &[u8]) {
+    let trimmed = path.strip_suffix(b"/").unwrap_or(path);
+    match trimmed.iter().rposition(|&byte| byte == b'/') {
+        Some(0) => (b"/", &trimmed[1..]),
+        Some(index) => (&trimmed[..index], &trimmed[index + 1..]),
+        None => (b".", trimmed),
+    }
 }
 
 #[repr(C)]
@@ -298,28 +353,60 @@ pub fn close(fd: i32) -> Result<()> {
     decode(result).map(|_| ())
 }
 
-pub fn open(path: &[u8]) -> Result<i32> {
-    open_path(path, O_RDONLY | O_NOFOLLOW, 0)
+pub fn open(dir_fd: i32, path: &[u8]) -> Result<i32> {
+    open_path(dir_fd, path, O_RDONLY | O_CLOEXEC, 0)
 }
 
-pub fn open_dir(path: &[u8]) -> Result<i32> {
-    open_path(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0)
+pub fn open_dir(dir_fd: i32, path: &[u8]) -> Result<i32> {
+    open_path(dir_fd, path, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0)
 }
 
-pub fn create_file(path: &[u8], replace: bool) -> Result<i32> {
-    let flags = O_WRONLY | O_CREAT | O_NOFOLLOW | if replace { O_TRUNC } else { O_EXCL };
-    open_path(path, flags, MODE_FILE)
+pub fn create_file(dir_fd: i32, path: &[u8], replace: bool) -> Result<i32> {
+    let flags = O_WRONLY | O_CREAT | O_CLOEXEC | if replace { O_TRUNC } else { O_EXCL };
+    open_path(dir_fd, path, flags, MODE_FILE)
 }
 
-pub fn create_dir(path: &[u8]) -> Result<()> {
-    let path = c_path(path)?;
-    let result = unsafe { syscall6(MKDIRAT, AT_FDCWD, path.as_ptr() as usize, MODE_DIR, 0, 0, 0) };
+pub fn create_dir(dir_fd: i32, path: &[u8]) -> Result<()> {
+    let (parent, name) = split_parent(path);
+    if name.is_empty() {
+        return Err(Error::InvalidInput);
+    }
+    let parent_fd = open_path(dir_fd, parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0)?;
+    let name = c_path(name)?;
+    let result = unsafe {
+        syscall6(
+            MKDIRAT,
+            parent_fd as usize,
+            name.as_ptr() as usize,
+            MODE_DIR,
+            0,
+            0,
+            0,
+        )
+    };
+    let _ = close(parent_fd);
     decode(result).map(|_| ())
 }
 
-pub fn remove_file(path: &[u8]) -> Result<()> {
-    let path = c_path(path)?;
-    let result = unsafe { syscall6(UNLINKAT, AT_FDCWD, path.as_ptr() as usize, 0, 0, 0, 0) };
+pub fn remove_file(dir_fd: i32, path: &[u8]) -> Result<()> {
+    let (parent, name) = split_parent(path);
+    if name.is_empty() {
+        return Err(Error::InvalidInput);
+    }
+    let parent_fd = open_path(dir_fd, parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0)?;
+    let name = c_path(name)?;
+    let result = unsafe {
+        syscall6(
+            UNLINKAT,
+            parent_fd as usize,
+            name.as_ptr() as usize,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    let _ = close(parent_fd);
     decode(result).map(|_| ())
 }
 
@@ -370,53 +457,54 @@ fn read_u16(buf: &[u8], at: usize) -> Option<u16> {
 }
 
 #[repr(C, align(8))]
-struct StatBuffer([u8; STAT_BUFFER_SIZE]);
+struct StatxBuffer([u8; STATX_BUFFER_SIZE]);
 
-fn parse_stat(buffer: &StatBuffer) -> FileInfo {
-    let mode = unsafe { read_unaligned(buffer.0.as_ptr().add(STAT_MODE_OFFSET) as *const u32) };
-    let size = unsafe { read_unaligned(buffer.0.as_ptr().add(STAT_SIZE_OFFSET) as *const i64) };
-    let mtime = unsafe { read_unaligned(buffer.0.as_ptr().add(STAT_MTIME_OFFSET) as *const i64) };
+fn parse_statx(buffer: &StatxBuffer) -> FileInfo {
+    let mode =
+        unsafe { read_unaligned(buffer.0.as_ptr().add(STATX_MODE_OFFSET) as *const u16) as u32 };
+    let size = unsafe { read_unaligned(buffer.0.as_ptr().add(STATX_SIZE_OFFSET) as *const u64) };
+    let mtime = unsafe { read_unaligned(buffer.0.as_ptr().add(STATX_MTIME_OFFSET) as *const i64) };
     FileInfo {
-        len: if size < 0 { 0 } else { size as u64 },
+        len: size,
         is_dir: mode & S_IFMT == S_IFDIR,
         mtime,
     }
 }
 
 pub fn fstat(fd: i32) -> Result<FileInfo> {
-    let mut buffer = StatBuffer([0; STAT_BUFFER_SIZE]);
+    let mut buffer = StatxBuffer([0; STATX_BUFFER_SIZE]);
     let result = unsafe {
         syscall6(
-            FSTAT,
+            STATX,
             fd as usize,
+            c"".as_ptr() as usize,
+            AT_EMPTY_PATH,
+            STATX_BASIC_STATS,
             buffer.0.as_mut_ptr() as usize,
-            0,
-            0,
-            0,
             0,
         )
     };
     decode(result)?;
-    Ok(parse_stat(&buffer))
+    Ok(parse_statx(&buffer))
 }
 
 pub fn fstat_at(dir_fd: i32, name: &[u8], nofollow: bool) -> Result<FileInfo> {
     let path = c_path(name)?;
     let flags = if nofollow { AT_SYMLINK_NOFOLLOW } else { 0 };
-    let mut buffer = StatBuffer([0; STAT_BUFFER_SIZE]);
+    let mut buffer = StatxBuffer([0; STATX_BUFFER_SIZE]);
     let result = unsafe {
         syscall6(
-            NEWFSTATAT,
+            STATX,
             dir_fd as usize,
             path.as_ptr() as usize,
-            buffer.0.as_mut_ptr() as usize,
             flags,
-            0,
+            STATX_BASIC_STATS,
+            buffer.0.as_mut_ptr() as usize,
             0,
         )
     };
     decode(result)?;
-    Ok(parse_stat(&buffer))
+    Ok(parse_statx(&buffer))
 }
 
 pub fn exit(code: i32) -> ! {
@@ -425,5 +513,26 @@ pub fn exit(code: i32) -> ! {
     }
     loop {
         core::hint::spin_loop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_statx, StatxBuffer, STATX_BUFFER_SIZE};
+
+    #[test]
+    fn parses_statx_fields() {
+        let mut buffer = StatxBuffer([0; STATX_BUFFER_SIZE]);
+        buffer.0[28..30].copy_from_slice(&0o100644u16.to_ne_bytes());
+        buffer.0[40..48].copy_from_slice(&12_345u64.to_ne_bytes());
+        buffer.0[112..120].copy_from_slice(&1_700_000_000i64.to_ne_bytes());
+
+        let info = parse_statx(&buffer);
+        assert_eq!(info.len, 12_345);
+        assert!(!info.is_dir);
+        assert_eq!(info.mtime, 1_700_000_000);
+
+        buffer.0[28..30].copy_from_slice(&0o040755u16.to_ne_bytes());
+        assert!(parse_statx(&buffer).is_dir);
     }
 }

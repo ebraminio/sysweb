@@ -40,7 +40,8 @@ const AT_SYMLINK_NOFOLLOW: usize = 0x20;
 
 const O_RDONLY: usize = 0;
 const O_WRONLY: usize = 1;
-const O_NOFOLLOW: usize = 0x100;
+const O_NOFOLLOW_ANY: usize = 0x2000_0000;
+const O_CLOEXEC: usize = 0x0100_0000;
 const O_CREAT: usize = 0x200;
 const O_TRUNC: usize = 0x400;
 const O_EXCL: usize = 0x800;
@@ -116,10 +117,49 @@ fn c_path(path: &[u8]) -> Result<[u8; MAX_PATH]> {
     Ok(buffer)
 }
 
-fn open_path(path: &[u8], flags: usize, mode: usize) -> Result<i32> {
+fn open_path(dir_fd: i32, path: &[u8], flags: usize, mode: usize) -> Result<i32> {
     let path = c_path(path)?;
-    unsafe { syscall6(OPENAT, AT_FDCWD, path.as_ptr() as usize, flags, mode, 0, 0) }
-        .map(|fd| fd as i32)
+    unsafe {
+        syscall6(
+            OPENAT,
+            dir_fd as usize,
+            path.as_ptr() as usize,
+            flags,
+            mode,
+            0,
+            0,
+        )
+    }
+    .map(|fd| fd as i32)
+}
+
+/// Open the document root, following symlinks in the root's own path. All
+/// later operations are relative to this fd and use O_NOFOLLOW_ANY.
+pub fn open_root(path: &[u8]) -> Result<i32> {
+    let path = c_path(path)?;
+    unsafe {
+        syscall6(
+            OPENAT,
+            AT_FDCWD,
+            path.as_ptr() as usize,
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC,
+            0,
+            0,
+            0,
+        )
+    }
+    .map(|fd| fd as i32)
+}
+
+/// Split a path into `(parent, basename)`. Parent is `"."` when the path has
+/// no separator, and `"/"` for an absolute one-component path.
+fn split_parent(path: &[u8]) -> (&[u8], &[u8]) {
+    let trimmed = path.strip_suffix(b"/").unwrap_or(path);
+    match trimmed.iter().rposition(|&byte| byte == b'/') {
+        Some(0) => (b"/", &trimmed[1..]),
+        Some(index) => (&trimmed[..index], &trimmed[index + 1..]),
+        None => (b".", trimmed),
+    }
 }
 
 #[repr(C)]
@@ -241,27 +281,77 @@ pub fn close(fd: i32) -> Result<()> {
     unsafe { syscall6(CLOSE, fd as usize, 0, 0, 0, 0, 0) }.map(|_| ())
 }
 
-pub fn open(path: &[u8]) -> Result<i32> {
-    open_path(path, O_RDONLY | O_NOFOLLOW, 0)
+pub fn open(dir_fd: i32, path: &[u8]) -> Result<i32> {
+    open_path(dir_fd, path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW_ANY, 0)
 }
 
-pub fn open_dir(path: &[u8]) -> Result<i32> {
-    open_path(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0)
+pub fn open_dir(dir_fd: i32, path: &[u8]) -> Result<i32> {
+    open_path(
+        dir_fd,
+        path,
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY,
+        0,
+    )
 }
 
-pub fn create_file(path: &[u8], replace: bool) -> Result<i32> {
-    let flags = O_WRONLY | O_CREAT | O_NOFOLLOW | if replace { O_TRUNC } else { O_EXCL };
-    open_path(path, flags, MODE_FILE)
+pub fn create_file(dir_fd: i32, path: &[u8], replace: bool) -> Result<i32> {
+    let flags =
+        O_WRONLY | O_CREAT | O_CLOEXEC | O_NOFOLLOW_ANY | if replace { O_TRUNC } else { O_EXCL };
+    open_path(dir_fd, path, flags, MODE_FILE)
 }
 
-pub fn create_dir(path: &[u8]) -> Result<()> {
-    let path = c_path(path)?;
-    unsafe { syscall6(MKDIRAT, AT_FDCWD, path.as_ptr() as usize, MODE_DIR, 0, 0, 0) }.map(|_| ())
+pub fn create_dir(dir_fd: i32, path: &[u8]) -> Result<()> {
+    let (parent, name) = split_parent(path);
+    if name.is_empty() {
+        return Err(Error::InvalidInput);
+    }
+    let parent_fd = open_path(
+        dir_fd,
+        parent,
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY,
+        0,
+    )?;
+    let name = c_path(name)?;
+    let result = unsafe {
+        syscall6(
+            MKDIRAT,
+            parent_fd as usize,
+            name.as_ptr() as usize,
+            MODE_DIR,
+            0,
+            0,
+            0,
+        )
+    };
+    let _ = close(parent_fd);
+    result.map(|_| ())
 }
 
-pub fn remove_file(path: &[u8]) -> Result<()> {
-    let path = c_path(path)?;
-    unsafe { syscall6(UNLINKAT, AT_FDCWD, path.as_ptr() as usize, 0, 0, 0, 0) }.map(|_| ())
+pub fn remove_file(dir_fd: i32, path: &[u8]) -> Result<()> {
+    let (parent, name) = split_parent(path);
+    if name.is_empty() {
+        return Err(Error::InvalidInput);
+    }
+    let parent_fd = open_path(
+        dir_fd,
+        parent,
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY,
+        0,
+    )?;
+    let name = c_path(name)?;
+    let result = unsafe {
+        syscall6(
+            UNLINKAT,
+            parent_fd as usize,
+            name.as_ptr() as usize,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    let _ = close(parent_fd);
+    result.map(|_| ())
 }
 
 pub fn getdents(fd: i32, buf: &mut [u8]) -> Result<usize> {

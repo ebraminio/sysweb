@@ -30,8 +30,8 @@ Direct syscalls and no allocation make the moving parts visible. There is no
 runtime, no scheduler, no hidden allocations, and no C library between the
 request and the kernel. That makes the project a useful testbed for:
 
-- a portable `Platform` trait over Linux `epoll`, macOS `kqueue`, and Windows
-  IOCP;
+- a portable `Platform` trait over Linux `io_uring`, macOS `kqueue`, and
+  Windows IOCP;
 - fixed-buffer HTTP parsing, directory rendering, and response generation;
 - a genuinely libc-free Linux server binary;
 - a CRT-free Windows server binary.
@@ -63,6 +63,23 @@ Linux is the primary target for the libc-free goal. macOS uses Apple's
 undocumented raw syscall ABI; Apple does not promise stability across releases.
 The `libSystem` load command is mandatory for ld64, but `nm -u` on the release
 binary is empty.
+
+### Latest-API policy
+
+There are no compatibility fallbacks for older OS releases. When two interfaces
+exist, the newest one wins:
+
+- **Linux 5.6+**: `openat2` with `RESOLVE_NO_SYMLINKS` for every open/create,
+  `statx` for metadata, `getdents64` for directory reads. The async milestone
+  targets **io_uring**, not epoll.
+- **macOS 11+**: `getdirentries64`, `fstatat`, and `O_NOFOLLOW_ANY`; the async
+  milestone targets `kqueue`.
+- **Windows 10 1809+**: IOCP with `GetQueuedCompletionStatusEx` and
+  `CreateFile2`; no `WSAPoll` fallback and no CRT.
+
+The document root is opened once and all paths are relative to that directory
+fd. Symlink denial therefore applies *beneath* the root, while the root path
+itself may live under a symlinked system directory such as macOS `/var`.
 
 ## Quick start
 
@@ -144,8 +161,9 @@ it; this server has no TLS, authentication, or rate limiting.
 - `301` redirect from `/dir` to `/dir/`;
 - percent-decoding, query-string stripping, dot-segment normalization, and
   traversal rejection;
-- final-component symlinks are denied (`O_NOFOLLOW`) and shown as unlinked
-  “link” entries in the index;
+- all symlinks beneath the document root are denied (`openat2`
+  `RESOLVE_NO_SYMLINKS` on Linux, `O_NOFOLLOW_ANY` on macOS) and shown as
+  unlinked “link” entries in the index;
 - fixed buffers throughout: request 8 KiB, URL 1 KiB, path 1.5 KiB, header
   4 KiB, directory record 4 KiB, listing 64 KiB, file chunk 16 KiB;
 - request logging to stderr, `--quiet` to suppress it;
@@ -186,8 +204,8 @@ Current stripped sizes from this workspace:
 | Target | Size |
 | --- | ---: |
 | macOS arm64 | 66,480 B |
-| Linux x86_64 | 43,032 B |
-| Linux aarch64 | 41,520 B |
+| Linux x86_64 | 43,408 B |
+| Linux aarch64 | 41,904 B |
 
 Linux runtime tests run in the CI workflow; both Linux targets were cross-built
 and statically verified locally with `ld.lld`, `file`, `readelf`, and `nm`.
@@ -232,8 +250,8 @@ This is a milestone, not a hardened internet-facing server:
 - uploads are off by default, capped at 1 GiB, and have no auth or quota;
 - no delete, rename, Range, `ETag`, `Last-Modified`, or `Date` yet;
 - no CORS, cross-origin isolation, prefix, or inactivity timeout yet;
-- final-component symlinks are denied, but a symlinked intermediate directory
-  can still escape the root; `openat2(RESOLVE_BENEATH)` is the planned fix;
+- all symlinks beneath the root are denied; the root path itself may be a
+  symlink (it is opened once at startup);
 - no TLS, authentication, compression, or directory deletion;
 - an `accept` error other than `EINTR` terminates the process;
 - macOS support is Apple Silicon only.
@@ -244,7 +262,8 @@ See [SECURITY.md](SECURITY.md) before enabling writes or exposing the server.
 
 The next milestone is the async reactor abstraction:
 
-- Linux `epoll`, macOS `kqueue`, Windows IOCP behind one `Reactor` trait;
+- Linux **io_uring**, macOS `kqueue`, Windows IOCP behind one `Reactor` trait;
+  no epoll/WSAPoll fallback;
 - non-blocking sockets, a hand-written connection state machine, fixed
   per-connection buffers, no futures executor;
 - uploads integrated into the state machine; directory listing stays bounded;

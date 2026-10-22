@@ -14,6 +14,7 @@ struct TestServer {
     child: Child,
     port: u16,
     root: PathBuf,
+    outside: PathBuf,
 }
 
 impl Drop for TestServer {
@@ -21,6 +22,7 @@ impl Drop for TestServer {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(&self.outside);
     }
 }
 
@@ -37,7 +39,7 @@ fn write_file(root: &Path, name: &str, contents: &[u8]) {
     fs::write(path, contents).expect("write fixture");
 }
 
-fn create_fixtures(root: &Path) {
+fn create_fixtures(root: &Path, outside: &Path) {
     write_file(root, "index.html", b"<h1>index</h1>");
     write_file(root, "hello world.txt", b"hello, space");
     write_file(root, "app.js", b"console.log('hi')");
@@ -53,14 +55,19 @@ fn create_fixtures(root: &Path) {
     write_file(root, "assets/replace.txt", b"old");
     fs::create_dir_all(root.join("assets/nested")).expect("nested dir");
     std::os::unix::fs::symlink("/etc/passwd", root.join("assets/leak")).expect("symlink");
+    std::os::unix::fs::symlink(outside, root.join("assets/linkdir")).expect("dir symlink");
 }
 
 fn start_server(extra: &[&str]) -> TestServer {
     let id = NEXT_SERVER.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!("sysweb-e2e-{}-{id}", std::process::id()));
+    let outside = std::env::temp_dir().join(format!("sysweb-outside-{}-{id}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&outside);
     fs::create_dir_all(&root).expect("create root");
-    create_fixtures(&root);
+    fs::create_dir_all(&outside).expect("create outside");
+    write_file(&outside, "secret.txt", b"outside secret");
+    create_fixtures(&root, &outside);
 
     let port = free_port();
     let mut command = Command::new(env!("CARGO_BIN_EXE_syswebd"));
@@ -80,7 +87,12 @@ fn start_server(extra: &[&str]) -> TestServer {
         .spawn()
         .expect("spawn syswebd");
 
-    let mut server = TestServer { child, port, root };
+    let mut server = TestServer {
+        child,
+        port,
+        root,
+        outside,
+    };
 
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -270,6 +282,12 @@ fn serves_static_files_and_directory_indexes() {
     assert_status(&head, "HTTP/1.1 403 Forbidden");
     assert!(text(&get(port, "/assets/")).contains("symlinks are not served"));
 
+    // A symlinked directory must not be traversed, even for a real file
+    // behind it.
+    let response = get(port, "/assets/linkdir/secret.txt");
+    let (head, _) = split(&response);
+    assert_status(&head, "HTTP/1.1 403 Forbidden");
+
     let response = get(port, "/assets/nested/");
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 200 OK");
@@ -339,6 +357,10 @@ fn uploads_create_files_and_directories() {
 
     let response = put(port, "/assets/no-parent/file.txt", b"x");
     assert_status(&split(&response).0, "HTTP/1.1 404 Not Found");
+
+    // Writes through a symlinked directory are refused as well.
+    let response = put(port, "/assets/linkdir/upload.txt", b"x");
+    assert_status(&split(&response).0, "HTTP/1.1 403 Forbidden");
 
     let response = put(port, "/", b"x");
     assert_status(&split(&response).0, "HTTP/1.1 400 Bad Request");

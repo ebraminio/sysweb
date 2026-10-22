@@ -46,7 +46,7 @@ pub fn run(args: &[&[u8]]) -> ! {
             platform::exit(0)
         }
         Ok(ParseOutcome::Run(config)) => {
-            let mut server = Server::new(platform::Sys, config);
+            let mut server = Server::new(platform::Sys::new(), config);
             server.run()
         }
         Err(error) => {

@@ -83,8 +83,8 @@ page. There is no bundle, no build step, and no asset directory to lose.
 | Heap, buffers, arrays, callbacks | Fixed buffers, no allocator, blocking loop |
 | Multipart upload parser | Raw `PUT` with `Content-Length` (browser `fetch`/XHR and `curl -T`) |
 | Directory HTML built from arrays | 64 KiB fixed HTML buffer, streamed escaping/encoding |
-| `fs.readdir`, `fs.stat` | `getdents64`/`getdirentries64`, `fstatat` |
-| Follows links unless checked | Final-component symlinks denied (`O_NOFOLLOW`) |
+| `fs.readdir`, `fs.stat` | `getdents64`/`getdirentries64`, `statx`/`fstatat` |
+| Follows links unless checked | All symlinks beneath the root denied |
 | HTTPS in-process | TLS out of scope; put a reverse proxy in front |
 | `--cmd` command execution | Never implemented; remote code execution is not a feature |
 | `config.json` | CLI flags; a config file is roadmap |

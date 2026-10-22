@@ -57,8 +57,8 @@ Out of scope for 0.1:
 - **Rejected bytes.** NUL, backslash, ASCII controls, and DEL are rejected
   before the filesystem is touched.
 - **Dot-segment normalization.** Empty and `.` segments are dropped; `..` pops
-  a segment and is rejected if it would escape `/`. A second check in
-  `path::join` rejects any residual `..` segment.
+  a segment and is rejected if it would escape `/`. The resulting URL path is
+  made relative to the document-root fd and opened with a no-symlink policy.
 - **Fixed buffers.** Oversized headers are 431; oversized URLs are 414. There
   are no dynamic allocations to exhaust.
 - **No raw header reflection.** Response headers contain static strings,
@@ -70,9 +70,10 @@ Out of scope for 0.1:
   process with `SIGPIPE` on Linux or macOS.
 - **Read-only by default.** Files are opened `O_RDONLY`; uploads and folder
   creation require `--upload`, and overwriting requires `--replace`.
-- **No symlink following on the final component.** `O_NOFOLLOW` is used for
-  file opens, directory opens, and upload creation. Symlinks are rendered as
-  unlinked `link` rows in the index.
+- **No symlinks beneath the document root.** Linux uses `openat2` with
+  `RESOLVE_NO_SYMLINKS`; macOS uses `O_NOFOLLOW_ANY`. Every operation is
+  relative to a document-root fd opened once at startup. Symlinks are rendered
+  as unlinked `link` rows in the index.
 - **Bounded uploads.** `Content-Length` is mandatory for file uploads, chunked
   bodies are rejected, and bodies above 1 GiB are 413 before reading.
 - **Failed uploads are unlinked.** A partial file is removed after early EOF or
@@ -83,6 +84,12 @@ Out of scope for 0.1:
 - **No CGI/`--cmd`.** There is no command execution endpoint, by design.
 
 ## Known limitations
+
+### Latest-API floor
+
+There are no compatibility fallbacks: Linux 5.6+ (`openat2`), macOS 11+
+(`O_NOFOLLOW_ANY`), and Windows 10 1809+ (IOCP) are the minimums. Older hosts
+are unsupported, not emulated.
 
 ### No TLS
 
@@ -97,13 +104,13 @@ Do not expose the server to untrusted networks until the async reactor and
 timeouts land (milestone 1/2). A reverse proxy with timeouts can mitigate this
 in the meantime.
 
-### Symlinks in intermediate directories
+### Symlinks
 
-Final-component symlinks are refused, but a symlinked directory in the middle
-of a path can still escape the document root. Only serve a tree you control and
-do not place symlinked directories inside it. Planned fix:
-`openat2(RESOLVE_BENEATH)` on Linux and component-by-component `O_NOFOLLOW`
-walks elsewhere.
+All symlinks beneath the document root are refused, including intermediate
+directories, for reads, listings, uploads, folder creation, and cleanup. The
+root path itself may contain symlinks (for example macOS `/var`): it is opened
+once at startup. Hard links and bind mounts are not detected; only serve a tree
+you control.
 
 ### Uploads are unauthenticated
 
@@ -182,7 +189,7 @@ minimal document root.
 - Put a reverse proxy in front for TLS, timeouts, and connection limits.
 - Do not place secrets, `.git`, source code, or private keys in the served
   directory.
-- Keep the document root free of symlinks to outside paths.
+- Do not place symlinks beneath the document root; the root path itself may be a symlink.
 - Watch stderr for `syswebd: ...` errors; `--quiet` suppresses request logs but
   not error lines.
 
@@ -190,11 +197,11 @@ minimal document root.
 
 - read/write/idle timeouts;
 - connection limits and accept backoff;
-- full symlink containment (`openat2`/component walks);
 - authentication and opt-in delete/rename;
 - CSRF/Origin/Host validation;
 - atomic temp+rename uploads and disk quotas;
 - fuzzing of the parser, path normalizer, and listing escaper;
+- a latest-API audit (io_uring, IOCP, `statx`/`openat2` extensions);
 - TLS boundary documentation (likely a separate project);
 - seccomp/pledge-style sandboxing;
 - `Date`/`ETag`/range correctness (not security-critical, but HTTP correctness).

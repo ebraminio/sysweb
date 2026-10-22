@@ -29,8 +29,8 @@ The current release (milestone 0.5).
 - [x] Opt-in raw `PUT` uploads, folder creation, `--replace`, 1 GiB cap, and
       failed-upload cleanup.
 - [x] `301` from `/dir` to `/dir/`; `--no-index` mode.
-- [x] HTML escaping and URL encoding for listing entries; final-component
-      `O_NOFOLLOW`.
+- [x] HTML escaping and URL encoding for listing entries; all symlinks
+      beneath the root denied.
 - [x] Percent-decoding, dot-segment normalization, traversal rejection.
 - [x] 201/301/400/403/404/405/409/411/413/414/431/500/505 responses.
 - [x] `Content-Length`, `Content-Type`, `Server`, `Connection: close`.
@@ -39,13 +39,17 @@ The current release (milestone 0.5).
 - [x] Unit tests + four real-binary end-to-end tests.
 - [x] CI workflow for Linux and macOS, including `cargo test --release` to
       catch LTO-only libcall bugs.
-- [x] Demonstrated: 66,480-byte macOS binary with `nm -u` empty; 43,032-byte
-      (x86_64) and 41,520-byte (aarch64) static Linux ELFs with no dynamic
+- [x] Latest-API policy: `openat2` + `RESOLVE_NO_SYMLINKS` and `statx` on
+      Linux, `O_NOFOLLOW_ANY` on macOS, all relative to a document-root fd.
+- [x] All symlinks beneath the root denied (final and intermediate).
+- [x] Demonstrated: 66,480-byte macOS binary with `nm -u` empty; 43,408-byte
+      (x86_64) and 41,904-byte (aarch64) static Linux ELFs with no dynamic
       section.
 
 **Known gaps:** single-threaded blocking, no timeouts, no keep-alive, no `Date`,
-no `Range`, no auth/delete/rename, intermediate symlink escape, macOS Intel
-unsupported, no Windows backend.
+no `Range`, no auth/delete/rename, macOS Intel unsupported, no Windows backend.
+Minimums are Linux 5.6+, macOS 11+, and Windows 10 1809+; there are no legacy
+fallbacks.
 
 ---
 
@@ -89,12 +93,10 @@ Make the blocking server pleasant and safe enough to run on a LAN.
 - [ ] Graceful shutdown on `SIGINT`/`SIGTERM` (signal syscalls; no libc).
 - [ ] `EMFILE` backoff instead of terminating the process.
 - [ ] Configurable maximum request-header size and connection limit.
-- [ ] Symlink policy: refuse to follow symlinks that escape the root. On Linux,
-      `openat2(RESOLVE_BENEATH)` is the target; elsewhere use `O_NOFOLLOW` /
-      `lstat` walks.
 - [ ] Never log raw control bytes; keep the current normalized-path logging.
-- [ ] Fuzz targets for `http::parse`, `path::normalize`, and `path::join`
-      (`cargo-fuzz` is test-only tooling, not a runtime dependency).
+- [ ] Fuzz targets for `http::parse`, `path::normalize`,
+      `path::append_index`, and the listing escaper (`cargo-fuzz` is test-only
+      tooling, not a runtime dependency).
 - [ ] Property test: no input to `normalize` can produce a `..` segment.
 - [ ] Miri/UB review of the unsafe modules where feasible.
 
@@ -123,14 +125,15 @@ executor and no allocation.
 
 ### Backends
 
-- [ ] Linux `epoll`: `epoll_create1` (291), `epoll_ctl` (233), `epoll_wait`
-      (232), plus `eventfd` for wakeup.
-- [ ] `accept4` with `SOCK_NONBLOCK`/`SOCK_CLOEXEC` (288 on x86_64, 242 on
-      aarch64).
+- [ ] Linux **io_uring** only: `io_uring_setup` (425), `io_uring_enter` (426),
+      `io_uring_register` (427); `IORING_OP_ACCEPT/RECV/SEND/OPENAT2/STATX/
+      CLOSE/SPLICE`. No epoll backend.
+- [ ] Registered buffers and, where useful, `IORING_SETUP_SQPOLL`;
+      multishot accept/recv where it simplifies the state machine.
 - [ ] macOS `kqueue` (362) / `kevent` (363) with `EVFILT_READ`/`EVFILT_WRITE`.
 - [ ] macOS non-blocking sockets via `fcntl(F_SETFL, O_NONBLOCK)` (92).
-- [ ] Edge-triggered vs level-triggered decision documented; start
-      level-triggered for simplicity.
+- [ ] Document the io_uring submission/completion model and the kqueue
+      mapping side by side.
 
 ### Server state machine
 
@@ -163,9 +166,10 @@ executor and no allocation.
       recipe and the LLVM/lld alternative.
 - [ ] `WSAStartup`, `socket`, `bind`, `listen`, `accept`, `recv`, `send`.
 - [ ] File I/O with `CreateFileA`, `GetFileSizeEx`, `ReadFile`, `CloseHandle`.
-- [ ] First reactor: `WSAPoll` (readiness), reusing the state machine.
-- [ ] Then IOCP: `CreateIoCompletionPort`, `GetQueuedCompletionStatus`,
-      `AcceptEx`, `WSARecv`, `WSASend`, `CancelIoEx`.
+- [ ] IOCP directly: `CreateIoCompletionPort`,
+      `GetQueuedCompletionStatusEx`, `AcceptEx`, `WSARecv`, `WSASend`,
+      `CancelIoEx`. No `WSAPoll`/`select` fallback.
+- [ ] File I/O with `CreateFile2`/`GetFileSizeEx`/`ReadFile`.
 - [ ] CI job on `windows-latest`; `dumpbin /dependents` proves no CRT DLLs and
       `dumpbin /imports` lists only the intended Win32 DLLs.
 - [ ] E2E test on Windows.
@@ -240,8 +244,8 @@ Every milestone must preserve:
 - Should the macOS backend keep raw syscalls, or offer a `libsystem` feature for
   stability? Raw is the experiment; a feature-gated fallback may be wise before
   publishing.
-- Is `epoll` level-triggered fast enough, or is edge-triggered worth the state
-  machine complexity from day one?
+- How much of io_uring should be used directly (`IORING_OP_*`) versus keeping
+  the portable readiness layer for macOS/Windows parity?
 - Does `sendfile` measurably beat a 16 KiB read/write loop for files that are
   already in page cache?
 - How should Windows express `Platform` file handles when IOCP needs

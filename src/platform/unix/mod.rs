@@ -32,9 +32,38 @@ const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
 const DT_LNK: u8 = 10;
 
-/// The current OS backend. Zero-sized: all state lives in OS handles.
-#[derive(Default)]
-pub struct Sys;
+/// The current OS backend. Holds the document-root descriptor.
+pub struct Sys {
+    root_fd: i32,
+}
+
+impl Sys {
+    pub const fn new() -> Self {
+        Self { root_fd: -1 }
+    }
+
+    fn root(&self) -> Result<i32> {
+        if self.root_fd < 0 {
+            Err(Error::InvalidInput)
+        } else {
+            Ok(self.root_fd)
+        }
+    }
+}
+
+impl Default for Sys {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for Sys {
+    fn drop(&mut self) {
+        if self.root_fd >= 0 {
+            let _ = abi::close(self.root_fd);
+        }
+    }
+}
 
 pub struct Listener {
     fd: i32,
@@ -85,6 +114,15 @@ impl Platform for Sys {
     type File = File;
     type Dir = Dir;
 
+    fn set_root(&mut self, root: &[u8]) -> Result<()> {
+        let fd = abi::open_root(root)?;
+        if self.root_fd >= 0 {
+            let _ = abi::close(self.root_fd);
+        }
+        self.root_fd = fd;
+        Ok(())
+    }
+
     fn bind(&mut self, addr: SocketAddr, backlog: u16) -> Result<Self::Listener> {
         let listener = Listener { fd: abi::socket()? };
         abi::set_reuseaddr(listener.fd)?;
@@ -127,7 +165,7 @@ impl Platform for Sys {
 
     fn open(&mut self, path: &[u8]) -> Result<Self::File> {
         loop {
-            match abi::open(path) {
+            match abi::open(self.root()?, path) {
                 Err(Error::Interrupted) => continue,
                 Ok(fd) => return Ok(File { fd }),
                 Err(error) => return Err(error),
@@ -155,7 +193,7 @@ impl Platform for Sys {
 
     fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir> {
         loop {
-            match abi::open_dir(path) {
+            match abi::open_dir(self.root()?, path) {
                 Err(Error::Interrupted) => continue,
                 Ok(fd) => {
                     return Ok(Dir {
@@ -233,7 +271,7 @@ impl Platform for Sys {
 
     fn create_file(&mut self, path: &[u8], replace: bool) -> Result<Self::File> {
         loop {
-            match abi::create_file(path, replace) {
+            match abi::create_file(self.root()?, path, replace) {
                 Err(Error::Interrupted) => continue,
                 Ok(fd) => return Ok(File { fd }),
                 Err(error) => return Err(error),
@@ -256,7 +294,7 @@ impl Platform for Sys {
 
     fn create_dir(&mut self, path: &[u8]) -> Result<()> {
         loop {
-            match abi::create_dir(path) {
+            match abi::create_dir(self.root()?, path) {
                 Err(Error::Interrupted) => continue,
                 other => return other,
             }
@@ -265,7 +303,7 @@ impl Platform for Sys {
 
     fn remove_file(&mut self, path: &[u8]) -> Result<()> {
         loop {
-            match abi::remove_file(path) {
+            match abi::remove_file(self.root()?, path) {
                 Err(Error::Interrupted) => continue,
                 other => return other,
             }

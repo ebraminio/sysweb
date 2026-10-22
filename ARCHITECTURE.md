@@ -15,9 +15,32 @@ Goals:
 5. Windows: no CRT (roadmap).
 6. `unsafe` concentrated in small, reviewable ABI modules.
 7. A blocking implementation that already has the shape of the async one.
+8. Latest OS APIs only. No legacy fallbacks.
 
 Non-goals for now: TLS, dynamic content, CGI, compression, virtual hosts,
 authentication, and hardening for hostile public traffic.
+
+## Latest-API policy
+
+When two OS interfaces exist, the newer one is used and the older one is not
+implemented:
+
+| Area | Chosen API | Minimum |
+| --- | --- | --- |
+| Linux open/containment | `openat2` + `RESOLVE_NO_SYMLINKS` | Linux 5.6 |
+| Linux metadata | `statx` (`STATX_BASIC_STATS`) | Linux 4.11 |
+| Linux directories | `getdents64` | Linux 2.6.23 |
+| Linux async | `io_uring` (not epoll) | Linux 5.1+ (milestone 2) |
+| macOS open/containment | `O_NOFOLLOW_ANY` | macOS 11 |
+| macOS directories | `getdirentries64` | 64-bit-inode macOS |
+| macOS metadata | `fstatat` | 64-bit-inode macOS |
+| macOS async | `kqueue`/`kevent` | macOS 10.5+ |
+| Windows async | IOCP + `GetQueuedCompletionStatusEx` | Windows 10 1809+ |
+| Windows files | `CreateFile2` | Windows 8+ |
+
+There is no legacy Linux `openat`/`fstat` fallback, no epoll backend, no
+`WSAPoll` path, and no pre-Vista Windows story. If the host is older than the
+table, the project does not target it.
 
 ## Layers
 
@@ -58,6 +81,7 @@ pub trait Platform {
     type File;
     type Dir;
 
+    fn set_root(&mut self, root: &[u8]) -> Result<()>;
     fn bind(&mut self, addr: SocketAddr, backlog: u16) -> Result<Self::Listener>;
     fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
     fn read(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
@@ -90,8 +114,11 @@ Design notes:
   returns and error paths cannot leak.
 - **Caller-provided buffers.** No method allocates. The backend fills the
   caller's slice, and all sizes are bounded by the caller.
-- **`&mut self`.** A future reactor keeps its epoll/kqueue/IOCP state inside
+- **`&mut self`.** A future reactor keeps its io_uring/kqueue/IOCP state inside
   the backend without changing the trait.
+- **`set_root`.** The document root is opened once. Every later path is
+  relative to that directory fd, so no-symlink rules apply beneath the root
+  without rejecting a symlinked system prefix such as macOS `/var`.
 - **Normalized errors.** `Error` hides errno differences (`EAGAIN` is 11 on
   Linux and 35 on macOS, `ECONNRESET` is 104 vs 54, etc.).
 
@@ -104,7 +131,6 @@ Design notes:
 | `read` | 0 | 63 |
 | `write` | 1 | 64 |
 | `close` | 3 | 57 |
-| `fstat` | 5 | 80 |
 | `socket` | 41 | 198 |
 | `accept` | 43 | 202 |
 | `sendto` | 44 | 206 |
@@ -113,10 +139,10 @@ Design notes:
 | `setsockopt` | 54 | 208 |
 | `getdents64` | 217 | 61 |
 | `exit_group` | 231 | 94 |
-| `openat` | 257 | 56 |
 | `mkdirat` | 258 | 34 |
-| `newfstatat` | 262 | 79 |
 | `unlinkat` | 263 | 35 |
+| `statx` | 332 | 291 |
+| `openat2` | 437 | 437 |
 
 Conventions:
 
@@ -129,20 +155,47 @@ The wrappers use `asm!` with `options(nostack)`, no `nomem`, and explicitly
 declare the clobbered registers. They are `unsafe fn`, called only from the
 `unix` layer which validates slice lengths and pointer provenance.
 
-### `struct stat`
+### Document-root fd and symlink containment
 
-`fstat`/`fstatat` fill a 144-byte buffer. Three fields are read:
+`Platform::set_root` opens the document root once at startup, following
+symlinks in the root's own path (so `--root /var/...` works on macOS, where
+`/var` is a symlink). Every later operation is relative to that directory fd:
 
-| ABI | `st_mode` | `st_size` | `st_mtime` |
-| --- | ---: | ---: | ---: |
-| x86_64 Linux | 24 (`u32`) | 48 (`i64`) | 88 (`i64`) |
-| aarch64 Linux | 16 (`u32`) | 48 (`i64`) | 88 (`i64`) |
-| macOS arm64 | 8 (`u16`) | 72 (`i64`) | 40 (`i64`) |
+- Linux: `openat2(root_fd, "a/b", RESOLVE_NO_SYMLINKS)`; the root is opened
+  with `resolve = 0`.
+- macOS: `openat(root_fd, "a/b", O_NOFOLLOW_ANY)`; the root is opened without
+  `O_NOFOLLOW_ANY`.
 
-The buffer is `#[repr(C, align(8))]` to be safe for the kernel's copy-out.
-`st_mode & 0170000 == 0040000` detects a directory. `st_mtime` drives the
-directory index's modification column and is formatted with a stack-only
-civil-from-days conversion (UTC; the page upgrades it to local time in JS).
+`create_dir` and `remove_file` split the path into parent and basename, open the
+parent with the same no-symlink policy, then call `mkdirat`/`unlinkat` relative
+to it. A symlink anywhere beneath the root — final component or intermediate
+directory — is rejected with `ELOOP` and mapped to 403.
+
+This is why the server keeps a `Sys` value with a root fd instead of the old
+zero-sized backend.
+
+### `struct statx` and macOS `struct stat`
+
+Linux uses `statx` with a 256-byte buffer and `STATX_BASIC_STATS`:
+
+| Field | Offset | Type |
+| --- | ---: | --- |
+| `stx_mode` | 28 | `u16` |
+| `stx_size` | 40 | `u64` |
+| `stx_mtime.tv_sec` | 112 | `i64` |
+
+`fstat(fd)` is `statx(fd, "", AT_EMPTY_PATH, ...)`; `fstat_at` uses the root
+directory fd and relative name, with `AT_SYMLINK_NOFOLLOW` for symlink entries.
+
+macOS keeps the raw `fstatat` ABI. Its kernel `struct stat` is 144 bytes and
+puts `st_mode` at 8 (`u16`), `st_size` at 72 (`i64`), and `st_mtime` at 40
+(`i64`). libSystem translates this to the SDK's different userspace layout; we
+read the raw ABI directly.
+
+Both buffers are `#[repr(C, align(8))]`. `st_mode & 0170000 == 0040000` detects
+a directory. `st_mtime` drives the index's modification column and is formatted
+with a stack-only civil-from-days conversion (UTC; the page upgrades it to local
+time in JS).
 
 ### No-libc linking
 
@@ -246,11 +299,11 @@ not implemented yet.
 3. `path::normalize` strips the query, percent-decodes once, rejects NUL,
    backslash and control bytes, drops empty/`.` segments, rejects escaping
    `..`, and preserves a trailing slash. Result: at most 1 KiB.
-4. `path::join_dir` prefixes the document root without adding an index. A
-   subsequent `append_index` tries `index.html` only for directory URLs. Both
-   re-check for `..` segments as defense in depth.
-5. `Platform::open` opens the path read-only with `O_NOFOLLOW` on the final
-   component. `file_info` gets size, mode, and mtime.
+4. `root_relative` turns `/a/b` into `a/b` (root itself is `.`). No document
+   root prefix is concatenated into the path; the platform backend resolves it
+   against the root fd. `append_index` is applied only for directory URLs.
+5. `Platform::open` opens the relative path read-only with no-symlink
+   resolution. `file_info` gets size, mode, and mtime.
 6. A regular file streams in 16 KiB chunks. `HEAD` sends only the header. The
    loop stops after exactly `Content-Length` bytes, so a growing file cannot
    overrun the advertised length.
@@ -276,8 +329,9 @@ as a test target.
 - breadcrumb links are URL-encoded segment by segment and HTML-escaped;
 - entries come from a 4 KiB `getdents` buffer; names are copied into a 256-byte
   caller buffer and never allocated;
-- each entry is `fstatat`-ed for size and mtime; symlinks use
-  `AT_SYMLINK_NOFOLLOW` and are rendered as unlinked `link` rows;
+- each entry is `statx`-ed on Linux / `fstatat`-ed on macOS for size and
+  mtime; symlinks use `AT_SYMLINK_NOFOLLOW` and are rendered as unlinked
+  `link` rows;
 - names are escaped for HTML and percent-encoded for `href`, so `&`, `<`, `>`,
   `"`, `'`, `%`, spaces, and non-ASCII bytes cannot break the markup;
 - sizes use SI units and timestamps use UTC `YYYY-MM-DD HH:MM`; inline JS
@@ -336,8 +390,8 @@ which is the desired failure mode.
   at 4096 bytes. The kernel/dyld guarantees NUL termination and validity.
 - Syscall buffers are local, initialized (or written by the kernel before being
   read), and bounds-checked before the call.
-- `fstat`/`fstatat` buffers are larger than every supported ABI's struct
-  (144 bytes).
+- `statx` uses a 256-byte buffer; the macOS `fstatat` buffer is 144 bytes.
+  Both exceed their ABI struct sizes.
 - Directory records are bounds-checked (`reclen`, `namlen`, name range) before
   any field is read; names are copied into a 256-byte caller buffer.
 - File descriptors have exactly one owner. `Listener`, `Stream`, `File`, and
@@ -345,8 +399,9 @@ which is the desired failure mode.
 - `write_all`/`write_file` advance by the kernel-returned count and reject a
   zero-length write as `BrokenPipe`, so they cannot spin.
 - Path normalization is done before the filesystem is touched; `open` is never
-  called with a path containing a `..` segment. Final-component symlinks are
-  refused with `O_NOFOLLOW`.
+  called with a path containing a `..` segment. All symlinks beneath the root
+  are refused by `openat2`/`O_NOFOLLOW_ANY`; only the root's own path may
+  contain symlinks.
 - Uploads require a `Content-Length`, never exceed 1 GiB, and stop after
   exactly that many bytes. A failed upload is unlinked.
 - Directory HTML is escaped for text/attributes and percent-encoded for URLs;
@@ -356,8 +411,7 @@ which is the desired failure mode.
 
 Known unsafe edges: the raw syscall ABI itself, the `argv` dereference, the
 `mem*` shims, and Apple's undocumented syscall ABI. All are isolated and
-reviewable. Intermediate symlinked directories are a separate, documented
-containment gap.
+reviewable.
 
 ## Async design (milestone 1)
 
@@ -405,9 +459,9 @@ Backends:
 
 | OS | Primitive | Syscalls / APIs |
 | --- | --- | --- |
-| Linux | `epoll` | `epoll_create1` 291, `epoll_ctl` 233, `epoll_wait` 232 |
+| Linux | `io_uring` | `io_uring_setup` 425, `io_uring_enter` 426, `io_uring_register` 427; `IORING_OP_ACCEPT/RECV/SEND/OPENAT2/STATX/SPLICE` |
 | macOS | `kqueue` | `kqueue` 362, `kevent` 363 |
-| Windows | IOCP | `CreateIoCompletionPort`, `GetQueuedCompletionStatus`, `AcceptEx` |
+| Windows | IOCP | `CreateIoCompletionPort`, `GetQueuedCompletionStatusEx`, `AcceptEx`, `WSARecv`/`WSASend` |
 
 Sockets become non-blocking (`accept4(SOCK_NONBLOCK)` on Linux, `fcntl` on
 macOS). Regular file reads stay blocking; disk reads are not the bottleneck for
@@ -455,10 +509,9 @@ bounded in-memory step (64 KiB), so it does not need incremental state.
   the same `mem*` symbols.
 - Winsock initialization via `WSAStartup` (not needed on modern Windows for
   some APIs, but required for Winsock).
-- First cut: `WSAPoll` or `select` for readiness, reusing the `Reactor` shape.
-- Then IOCP with overlapped `AcceptEx`/`WSARecv`/`WSASend`, which is the native
-  async API and matches the no-thread-per-connection goal.
-- File I/O via `CreateFileA`/`GetFileSizeEx`/`ReadFile`.
+- IOCP directly with overlapped `AcceptEx`/`WSARecv`/`WSASend`. There is no
+  `WSAPoll`/`select` stepping stone; IOCP is the only Windows reactor.
+- File I/O via `CreateFile2`/`GetFileSizeEx`/`ReadFile`.
 
 The `Platform` trait stays the same; `unix` becomes one implementation among
 several.
@@ -496,10 +549,11 @@ several.
   supported public ABI. A future macOS release can break them.
 - **Single-threaded blocking**: no timeouts yet; a slow client can pin the
   server. This is the main reason async is milestone 1.
-- **Symlinks**: final-component links are refused with `O_NOFOLLOW`, but an
-  intermediate symlinked directory can still escape the root. A full fix needs
-  `openat2(RESOLVE_BENEATH)` on Linux or component-by-component `O_NOFOLLOW`
-  walks; this is a roadmap item.
+- **Symlinks**: all links beneath the root are refused. The root's own path
+  may contain symlinks because it is opened once at startup; hard links and
+  bind mounts are outside the threat model.
+- **Latest-API floor**: Linux 5.6+, macOS 11+, Windows 10 1809+. There are no
+  fallbacks for older kernels/OS releases; this is deliberate.
 - **Uploads are powerful**: `--upload` lets any client that can reach the port
   write files; `--replace` can overwrite them. There is no authentication,
   quota, or CSRF/Host validation yet. Keep the default loopback bind.
