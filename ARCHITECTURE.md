@@ -331,7 +331,9 @@ not implemented yet.
    `Content-Type`, `Content-Length`, optional `Allow`/`Location`, and
    `Connection: close`.
 10. `Connection: close`: the stream is dropped, closing the fd. There is no
-    keep-alive state yet.
+    keep-alive state yet. If a rejected request announced a small body, it is
+    drained (up to 64 KiB) first: closing with unread input can turn the final
+    FIN into an RST on macOS and discard the response the client is reading.
 
 The HTTP, path, MIME, config, and listing modules are exercised by unit tests
 with `std` enabled; the library itself is `no_std` whenever it is not compiled
