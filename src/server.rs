@@ -72,10 +72,25 @@ impl<P: Platform> Server<P> {
             self.log_startup(addr);
         }
 
+        let mut transient = false;
         loop {
             match self.platform.accept(&listener) {
-                Ok(mut stream) => self.handle(&mut stream),
+                Ok(mut stream) => {
+                    transient = false;
+                    self.handle(&mut stream);
+                }
                 Err(Error::Interrupted) => continue,
+                Err(Error::TooManyOpenFiles)
+                | Err(Error::ConnectionAborted)
+                | Err(Error::ConnectionReset)
+                | Err(Error::WouldBlock) => {
+                    if !self.config.quiet() && !transient {
+                        self.platform
+                            .log(b"syswebd: accept temporarily failed; retrying\n");
+                        transient = true;
+                    }
+                    self.platform.sleep_ms(100);
+                }
                 Err(_) => {
                     self.platform.log(b"syswebd: accept failed\n");
                     self.platform.exit(1)

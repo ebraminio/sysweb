@@ -19,6 +19,7 @@ mod nr {
     pub const SENDFILE: usize = 40;
     pub const SENDTO: usize = 44;
     pub const RT_SIGPROCMASK: usize = 14;
+    pub const NANOSLEEP: usize = 35;
     pub const BIND: usize = 49;
     pub const LISTEN: usize = 50;
     pub const SETSOCKOPT: usize = 54;
@@ -40,6 +41,7 @@ mod nr {
     pub const SENDFILE: usize = 71;
     pub const SENDTO: usize = 206;
     pub const RT_SIGPROCMASK: usize = 135;
+    pub const NANOSLEEP: usize = 35;
     pub const BIND: usize = 200;
     pub const LISTEN: usize = 201;
     pub const SETSOCKOPT: usize = 208;
@@ -162,9 +164,41 @@ fn map_errno(errno: i32) -> Error {
         98 => Error::AddressInUse,
         23 | 24 => Error::TooManyOpenFiles,
         104 => Error::ConnectionReset,
+        103 => Error::ConnectionAborted,
         32 => Error::BrokenPipe,
         22 | 36 => Error::InvalidInput,
         other => Error::Other(other),
+    }
+}
+
+#[repr(C)]
+struct Timespec {
+    tv_sec: i64,
+    tv_nsec: i64,
+}
+
+pub fn sleep_ms(ms: u64) -> Result<()> {
+    let request = Timespec {
+        tv_sec: (ms / 1000) as i64,
+        tv_nsec: ((ms % 1000) * 1_000_000) as i64,
+    };
+    loop {
+        let result = unsafe {
+            syscall6(
+                nr::NANOSLEEP,
+                &request as *const Timespec as usize,
+                0,
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+        match decode(result) {
+            Ok(_) => return Ok(()),
+            Err(Error::Interrupted) => continue,
+            Err(error) => return Err(error),
+        }
     }
 }
 

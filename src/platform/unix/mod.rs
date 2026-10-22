@@ -154,6 +154,10 @@ impl Platform for Sys {
         }
     }
 
+    fn sleep_ms(&mut self, ms: u64) {
+        let _ = abi::sleep_ms(ms);
+    }
+
     fn write_all(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<()> {
         let mut written = 0usize;
         while written < buf.len() {
@@ -353,4 +357,17 @@ pub fn write_stderr(message: &[u8]) {
 
 pub fn exit(code: i32) -> ! {
     abi::exit(code)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sleep_returns() {
+        let start = std::time::Instant::now();
+        super::abi::sleep_ms(20).expect("sleep");
+        assert!(
+            start.elapsed() >= std::time::Duration::from_millis(10),
+            "sleep_ms returned too early"
+        );
+    }
 }

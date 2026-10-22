@@ -30,6 +30,7 @@ const FSTATAT: usize = 469;
 const UNLINKAT: usize = 472;
 const MKDIRAT: usize = 475;
 const EXIT: usize = 1;
+const POLL: usize = 230;
 
 const AF_INET: usize = 2;
 const SOCK_STREAM: usize = 1;
@@ -105,9 +106,21 @@ fn map_errno(errno: i32) -> Error {
         48 => Error::AddressInUse,
         23 | 24 => Error::TooManyOpenFiles,
         54 => Error::ConnectionReset,
+        53 => Error::ConnectionAborted,
         32 => Error::BrokenPipe,
         22 | 63 => Error::InvalidInput,
         other => Error::Other(other),
+    }
+}
+
+pub fn sleep_ms(ms: u64) -> Result<()> {
+    let timeout = core::cmp::min(ms, i32::MAX as u64) as i32;
+    loop {
+        match unsafe { syscall6(POLL, 0, 0, timeout as usize, 0, 0, 0) } {
+            Ok(_) => return Ok(()),
+            Err(Error::Interrupted) => continue,
+            Err(error) => return Err(error),
+        }
     }
 }
 

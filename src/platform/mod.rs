@@ -27,6 +27,7 @@ pub enum Error {
     AddressInUse,
     TooManyOpenFiles,
     ConnectionReset,
+    ConnectionAborted,
     BrokenPipe,
     InvalidInput,
     /// Any errno the abstraction does not know about.
@@ -102,6 +103,9 @@ pub trait Platform {
     fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
     fn read(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
     fn write_all(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<()>;
+    /// Sleep for a bounded time; used to back off from transient accept
+    /// failures without spinning.
+    fn sleep_ms(&mut self, ms: u64);
 
     /// Open `path` (relative to the document root) read-only.
     fn open(&mut self, path: &[u8]) -> Result<Self::File>;
