@@ -154,6 +154,8 @@ executor and no allocation.
       plus `ReadingBody → WritingFile` for uploads, `Listing`, and `Closing`.
 - [ ] Per-slot deadlines for header read, idle keep-alive, and write progress.
 - [ ] Bounded accept loop per event to avoid starving existing connections.
+- [ ] Replace the blocking accept backoff with a reactor timer/deadline and
+      remove `Platform::sleep_ms` if no blocking backend remains.
 - [ ] Backpressure: stop reading when the response socket is not writable;
       apply the same discipline to upload bodies and disk writes.
 - [ ] Keep-alive integrated into the state machine.

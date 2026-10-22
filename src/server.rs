@@ -89,6 +89,9 @@ impl<P: Platform> Server<P> {
                             .log(b"syswebd: accept temporarily failed; retrying\n");
                         transient = true;
                     }
+                    // TODO(async): schedule this retry through the reactor
+                    // timer/deadline and delete Platform::sleep_ms; blocking
+                    // here would stall the reactor.
                     self.platform.sleep_ms(100);
                 }
                 Err(_) => {

@@ -103,8 +103,11 @@ pub trait Platform {
     fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
     fn read(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
     fn write_all(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<()>;
-    /// Sleep for a bounded time; used to back off from transient accept
-    /// failures without spinning.
+    /// Blocking-only backoff for transient accept failures.
+    ///
+    /// TODO(async): the reactor should schedule the retry through its timer or
+    /// deadline instead. Remove this method once the accept loop no longer
+    /// calls it and no blocking backend needs it.
     fn sleep_ms(&mut self, ms: u64);
 
     /// Open `path` (relative to the document root) read-only.

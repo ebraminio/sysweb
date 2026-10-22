@@ -135,6 +135,8 @@ Design notes:
   permanent exit on transient pressure is not. `accept` retries
   `EMFILE`/`ENFILE`, `ECONNABORTED`, `ECONNRESET`, and `EAGAIN` after a 100 ms
   `sleep_ms` (libSystem `nanosleep` on macOS) instead of exiting.
+  `sleep_ms` is explicitly blocking-only: the async reactor must replace this
+  with a timer/deadline and remove it if no blocking backend remains.
   Fatal listener errors still terminate; there is no supervisor yet.
 - **Size budget.** Binary size is a design constraint, not an afterthought.
   CI and the release workflow enforce 112 KiB on macOS arm64, 64 KiB on Linux
