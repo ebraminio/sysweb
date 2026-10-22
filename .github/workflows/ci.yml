@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests (debug)
+        run: cargo test
+
+      # Release builds are not optional: this catches LLVM libcall
+      # canonicalization bugs (see the bzero/LTO story in ARCHITECTURE.md)
+      # that do not reproduce in debug builds.
+      - name: Tests (release + LTO)
+        run: cargo test --release
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Prove Linux has no libc
+        if: runner.os == 'Linux'
+        run: |
+          set -eux
+          file target/release/syswebd
+          readelf -h target/release/syswebd | grep 'Type:.*EXEC'
+          if readelf -l target/release/syswebd | grep -q 'INTERP'; then
+            echo 'unexpected PT_INTERP: binary is not static'
+            exit 1
+          fi
+          if readelf -d target/release/syswebd 2>/dev/null | grep -q 'NEEDED'; then
+            echo 'unexpected DT_NEEDED entry'
+            exit 1
+          fi
+          if nm -u target/release/syswebd 2>/dev/null | grep -q .; then
+            echo 'unexpected undefined symbols'
+            exit 1
+          fi
+          ls -l target/release/syswebd
+
+      - name: Prove macOS imports no symbols
+        if: runner.os == 'macOS'
+        run: |
+          set -eux
+          file target/release/syswebd
+          otool -L target/release/syswebd
+          if nm -u target/release/syswebd 2>/dev/null | grep -q .; then
+            echo 'unexpected undefined symbols'
+            exit 1
+          fi
+          ls -l target/release/syswebd
+
+  linux-aarch64-check:
+    name: check (linux aarch64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Type-check the aarch64 syscall backend
+        run: cargo check --target aarch64-unknown-linux-gnu

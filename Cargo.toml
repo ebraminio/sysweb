@@ -1,0 +1,33 @@
+[package]
+name = "sysweb"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "A no_std, no-alloc, syscall-first static web server"
+license = "MIT"
+readme = "README.md"
+keywords = ["no-std", "http", "server", "syscalls", "static-files"]
+categories = ["web-programming::http-server", "no-std"]
+publish = false
+
+[lib]
+name = "sysweb"
+path = "src/lib.rs"
+
+[[bin]]
+name = "syswebd"
+path = "src/bin/syswebd.rs"
+test = false
+bench = false
+
+[dependencies]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
