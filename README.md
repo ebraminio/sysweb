@@ -365,9 +365,10 @@ This is a milestone, not a hardened internet-facing server:
 - uploads are off by default, capped at 1 GiB, and have no auth or quota;
 - classic form posts upload one file per request; `filename*` (RFC 5987) and
   multi-file form fields are not parsed yet;
-- the old-browser page is functional but the CSS assumes a reasonably modern
-  layout engine; JS uploads need `File`/XHR, otherwise the classic form is the
-  fallback;
+- old browsers get a hard-coded light CSS fallback before the `var()` rules;
+  modern `prefers-color-scheme` dark mode is preserved. Layout is basic in
+  engines without flexbox. JS uploads still need `File`/XHR, otherwise the
+  classic form is the fallback;
 - no delete, rename, multi-range responses, `If-Range`, `ETag`,
   `Last-Modified`, or `Date` yet;
 - no CORS, cross-origin isolation, prefix, or inactivity timeout yet;
