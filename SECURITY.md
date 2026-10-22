@@ -65,7 +65,8 @@ Out of scope for 0.1:
   decimal numbers, and a percent-encoded `Location` path; raw request bytes are
   never echoed.
 - **Bounded reads/writes.** The parser stops at `\r\n\r\n` or 8 KiB; file
-  streaming and uploads stop at `Content-Length`.
+  streaming and uploads stop at `Content-Length`. Range offsets are resolved
+  against `st_size`; past-EOF requests get `416`, never a read beyond the file.
 - **SIGPIPE-safe disconnects.** Normal writes use `MSG_NOSIGNAL`; Linux blocks
   `SIGPIPE` process-wide for `sendfile`, and macOS sets `SO_NOSIGPIPE` on every
   accepted socket. An aborted download yields `EPIPE`, not process death.
