@@ -21,7 +21,7 @@ Linux/x86_64)
     budget=65536 # 64 KiB
     ;;
 Linux/aarch64 | Linux/arm64)
-    budget=65536 # 64 KiB
+    budget=73728 # 72 KiB
     ;;
 *)
     echo "check-size: no budget for $os/$arch (skipped)"

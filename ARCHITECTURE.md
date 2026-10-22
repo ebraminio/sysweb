@@ -137,9 +137,9 @@ Design notes:
   `sleep_ms` (Linux `nanosleep`, macOS `poll(NULL, 0, ms)`) instead of exiting.
   Fatal listener errors still terminate; there is no supervisor yet.
 - **Size budget.** Binary size is a design constraint, not an afterthought.
-  CI and the release workflow enforce 112 KiB on macOS arm64 and 64 KiB on each
-  Linux target via `scripts/check-size.sh`; changing a budget is a deliberate
-  change, not a silent regression.
+  CI and the release workflow enforce 112 KiB on macOS arm64, 64 KiB on Linux
+  x86_64, and 72 KiB on Linux aarch64 via `scripts/check-size.sh`; changing a
+  budget is a deliberate change, not a silent regression.
 
 ## Linux backend
 

@@ -248,8 +248,8 @@ Current stripped sizes from this workspace:
 | Target | Size | Budget |
 | --- | ---: | ---: |
 | macOS arm64 | 100,592 B | 112 KiB |
-| Linux x86_64 | 57,128 B | 64 KiB |
-| Linux aarch64 | 55,312 B | 64 KiB |
+| Linux x86_64 | 57,488 B | 64 KiB |
+| Linux aarch64 | 66,248 B | 72 KiB |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
 workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and

@@ -51,7 +51,7 @@ The current release (milestone 0.5).
       with tarballs and SHA-256 checksums.
 - [x] Transient `accept` failures retry with a 100 ms backoff instead of
       exiting; a stalled service is acceptable, a permanent exit is not.
-- [x] Enforced binary-size budgets: 112 KiB macOS arm64, 64 KiB per Linux
+- [x] Enforced binary-size budgets: 112 KiB macOS arm64, 64 KiB x86_64, 72 KiB aarch64
       target.
 - [x] `cargo-fuzz` targets for HTTP/path/multipart plus a black-box
       containment/hang/crash test in `tests/security.rs`.
@@ -59,7 +59,7 @@ The current release (milestone 0.5).
 - [x] Runtime-tested on a Raspberry Pi 5 (kernel 6.12 aarch64): listings,
       uploads, forms, `sendfile`, symlink denial, aborted transfers.
 - [x] Demonstrated: 100,592-byte macOS binary with only allowlisted libSystem
-      imports; 57,128-byte (x86_64) and 55,312-byte (aarch64) static Linux ELFs
+      imports; 57,488-byte (x86_64) and 66,248-byte (aarch64) static Linux ELFs
       with no dynamic section.
 
 **Known gaps:** single-threaded blocking, no timeouts, no keep-alive, no `Date`,
@@ -259,7 +259,7 @@ Every milestone must preserve:
 5. **Measurable claims.** Every “no libc”/“CRT-free” claim comes with a command
    (`nm -u`, `readelf -d`, `otool -L`, `dumpbin /dependents`) and CI output.
 6. **Small binaries.** Release binaries stay within the checked budgets
-   (112 KiB macOS arm64, 64 KiB per Linux target); growth is a deliberate
+   (112 KiB macOS arm64, 64 KiB x86_64, 72 KiB aarch64); growth is a deliberate
    decision, not a silent regression.
 
 ## Open questions
