@@ -307,6 +307,20 @@ fn serves_static_files_and_directory_indexes() {
     assert_eq!(header(&head, "Content-Range"), Some("bytes */40000"));
     assert_eq!(body, b"416 Range Not Satisfiable\n");
 
+    // A suffix longer than the file covers the whole file.
+    let response = get_range(port, "/large.bin", "bytes=-50000");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 206 Partial Content");
+    assert_eq!(header(&head, "Content-Range"), Some("bytes 0-39999/40000"));
+    assert_eq!(body.len(), 40_000);
+
+    // Empty files cannot satisfy any byte range.
+    let response = get_range(port, "/assets/empty.txt", "bytes=0-");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 416 Range Not Satisfiable");
+    assert_eq!(header(&head, "Content-Range"), Some("bytes */0"));
+    assert_eq!(body, b"416 Range Not Satisfiable\n");
+
     let response = head_range(port, "/large.bin", "bytes=10-19");
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 206 Partial Content");
