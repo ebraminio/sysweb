@@ -356,7 +356,9 @@ parser:
   API or modern APIs are absent, the form remains and still works. The inline
   JS is intentionally ES3-style and feature-detected: no `Promise`,
   `querySelectorAll`, `dataset`, `classList`, `fetch`, arrow functions, or
-  `const`/`let`. The CSS has hard-coded light base rules and a single
+  `const`/`let`. Folder upload uses `webkitdirectory`/`webkitRelativePath`,
+  creates each parent with `PUT .../` (409 is treated as existing), and then
+  PUTs the files in order; unsupported browsers simply hide that control. The CSS has hard-coded light base rules and a single
   `prefers-color-scheme: dark` override block at the end; there are no custom
   properties, so old engines still get readable colors.
 

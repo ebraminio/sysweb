@@ -370,6 +370,9 @@ This is a milestone, not a hardened internet-facing server:
   There are no CSS custom properties. Layout is basic in engines without
   flexbox. JS uploads still need `File`/XHR, otherwise the classic form is the
   fallback;
+- folder upload preserves relative paths but relies on the browser's
+  `webkitdirectory`/`webkitRelativePath`; empty directories are not reported by
+  the browser, and dropping a folder is not supported (drop files instead);
 - no delete, rename, multi-range responses, `If-Range`, `ETag`,
   `Last-Modified`, or `Date` yet;
 - no CORS, cross-origin isolation, prefix, or inactivity timeout yet;

@@ -130,6 +130,7 @@ contains a `<noscript>` multipart form for browsers without JavaScript.
 | Upload from terminal (`curl -T` / `curl -F`) | ✅ with `--upload` | `--max-upload` config |
 | Classic multipart form | ✅ with `--upload`, one file | multi-file forms, `filename*` |
 | Create folder (`PUT .../`) | ✅ with `--upload` | — |
+| Upload a folder tree | ✅ with `--upload` (`webkitdirectory`) | drag-and-drop folders |
 | Replace existing file | ✅ with `--replace` | atomic temp+rename |
 | Delete | ❌ | opt-in `--delete` |
 | Rename / move | ❌ | opt-in, two-step, containment-checked |
