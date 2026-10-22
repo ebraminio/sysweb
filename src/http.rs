@@ -29,7 +29,21 @@ pub enum Version {
     Http11,
 }
 
-/// A parsed request line plus the two headers the server interprets.
+/// A single byte range from a `Range: bytes=...` header.
+///
+/// Multi-range requests are deliberately not represented: the server ignores
+/// them and serves the full representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RangeSpec {
+    /// `bytes=start-end`
+    FromTo(u64, u64),
+    /// `bytes=start-`
+    From(u64),
+    /// `bytes=-suffix`
+    Suffix(u64),
+}
+
+/// A parsed request line plus the headers the server interprets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Request<'a> {
     pub method: Method,
@@ -37,6 +51,7 @@ pub struct Request<'a> {
     pub version: Version,
     pub content_length: Option<u64>,
     pub content_type: Option<&'a [u8]>,
+    pub range: Option<RangeSpec>,
     pub expect_continue: bool,
     /// Index just past `\r\n\r\n`; body bytes may already follow in the buffer.
     pub body_offset: usize,
@@ -98,6 +113,7 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
 
     let mut content_length = None;
     let mut content_type = None;
+    let mut range = None;
     let mut expect_continue = false;
     if line_end + 2 <= head.len() {
         for header_line in head[line_end + 2..].split(|&b| b == b'\n') {
@@ -124,6 +140,8 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
                 return Err(ParseError::Malformed);
             } else if name.eq_ignore_ascii_case(b"content-type") {
                 content_type = Some(value);
+            } else if name.eq_ignore_ascii_case(b"range") && range.is_none() {
+                range = parse_range(value);
             } else if name.eq_ignore_ascii_case(b"expect") {
                 expect_continue = value.eq_ignore_ascii_case(b"100-continue");
             }
@@ -136,9 +154,40 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
         version,
         content_length,
         content_type,
+        range,
         expect_continue,
         body_offset: end,
     })
+}
+
+fn parse_range(value: &[u8]) -> Option<RangeSpec> {
+    let value = trim(value);
+    if value.len() < 6 || !value[..6].eq_ignore_ascii_case(b"bytes=") {
+        return None;
+    }
+    let spec = &value[6..];
+    // Multipart ranges are legal HTTP but not implemented; ignore the header
+    // and serve the full file rather than inventing a multipart response.
+    if spec.contains(&b',') {
+        return None;
+    }
+    let dash = spec.iter().position(|&byte| byte == b'-')?;
+    let start = trim(&spec[..dash]);
+    let end = trim(&spec[dash + 1..]);
+
+    if start.is_empty() {
+        let suffix = parse_u64(end)?;
+        return Some(RangeSpec::Suffix(suffix));
+    }
+    let start = parse_u64(start)?;
+    if end.is_empty() {
+        return Some(RangeSpec::From(start));
+    }
+    let end = parse_u64(end)?;
+    if end < start {
+        return None;
+    }
+    Some(RangeSpec::FromTo(start, end))
 }
 
 fn trim(mut value: &[u8]) -> &[u8] {
@@ -184,7 +233,9 @@ pub enum Status {
     Forbidden,
     NotFound,
     MethodNotAllowed,
+    PartialContent,
     UnsupportedMediaType,
+    RangeNotSatisfiable,
     Conflict,
     LengthRequired,
     PayloadTooLarge,
@@ -204,7 +255,9 @@ impl Status {
             Status::Forbidden => 403,
             Status::NotFound => 404,
             Status::MethodNotAllowed => 405,
+            Status::PartialContent => 206,
             Status::UnsupportedMediaType => 415,
+            Status::RangeNotSatisfiable => 416,
             Status::Conflict => 409,
             Status::LengthRequired => 411,
             Status::PayloadTooLarge => 413,
@@ -224,7 +277,9 @@ impl Status {
             Status::Forbidden => b"Forbidden",
             Status::NotFound => b"Not Found",
             Status::MethodNotAllowed => b"Method Not Allowed",
+            Status::PartialContent => b"Partial Content",
             Status::UnsupportedMediaType => b"Unsupported Media Type",
+            Status::RangeNotSatisfiable => b"Range Not Satisfiable",
             Status::Conflict => b"Conflict",
             Status::LengthRequired => b"Length Required",
             Status::PayloadTooLarge => b"Payload Too Large",
@@ -243,7 +298,9 @@ impl Status {
             Status::Forbidden => b"403 Forbidden\n",
             Status::NotFound => b"404 Not Found\n",
             Status::MethodNotAllowed => b"405 Method Not Allowed\n",
+            Status::PartialContent => b"",
             Status::UnsupportedMediaType => b"415 Unsupported Media Type\n",
+            Status::RangeNotSatisfiable => b"416 Range Not Satisfiable\n",
             Status::Conflict => b"409 Conflict\n",
             Status::LengthRequired => b"411 Length Required\n",
             Status::PayloadTooLarge => b"413 Payload Too Large\n",
@@ -257,7 +314,7 @@ impl Status {
 
 #[cfg(test)]
 mod tests {
-    use super::{header_end, parse, Method, ParseError, Status, Version};
+    use super::{header_end, parse, Method, ParseError, RangeSpec, Status, Version};
 
     #[test]
     fn finds_header_end() {
@@ -274,11 +331,28 @@ mod tests {
         assert_eq!(r.version, Version::Http11);
         assert_eq!(r.content_length, None);
         assert_eq!(r.content_type, None);
+        assert_eq!(r.range, None);
         assert_eq!(r.body_offset, 37);
 
         let r = parse(b"HEAD / HTTP/1.0\r\n\r\n").unwrap();
         assert_eq!(r.method, Method::Head);
         assert_eq!(r.version, Version::Http10);
+    }
+
+    #[test]
+    fn parses_single_byte_ranges() {
+        let raw = b"GET /x HTTP/1.1\r\nRange: bytes=10-19\r\n\r\n";
+        assert_eq!(parse(raw).unwrap().range, Some(RangeSpec::FromTo(10, 19)));
+        let raw = b"GET /x HTTP/1.1\r\nRange: bytes=10-\r\n\r\n";
+        assert_eq!(parse(raw).unwrap().range, Some(RangeSpec::From(10)));
+        let raw = b"GET /x HTTP/1.1\r\nRange: bytes=-10\r\n\r\n";
+        assert_eq!(parse(raw).unwrap().range, Some(RangeSpec::Suffix(10)));
+        let raw = b"GET /x HTTP/1.1\r\nRange: bytes=0-0,3-4\r\n\r\n";
+        assert_eq!(parse(raw).unwrap().range, None);
+        let raw = b"GET /x HTTP/1.1\r\nRange: bytes=9-3\r\n\r\n";
+        assert_eq!(parse(raw).unwrap().range, None);
+        let raw = b"GET /x HTTP/1.1\r\nRange: pages=1-2\r\n\r\n";
+        assert_eq!(parse(raw).unwrap().range, None);
     }
 
     #[test]
@@ -288,6 +362,7 @@ mod tests {
         assert_eq!(r.method, Method::Put);
         assert_eq!(r.content_length, Some(5));
         assert_eq!(r.content_type, Some(&b"text/plain"[..]));
+        assert_eq!(r.range, None);
         assert!(r.expect_continue);
         assert_eq!(&raw[r.body_offset..], b"hello");
     }
@@ -365,6 +440,8 @@ mod tests {
         assert_eq!(Status::UnsupportedMediaType.code(), 415);
         assert_eq!(Status::LengthRequired.code(), 411);
         assert_eq!(Status::PayloadTooLarge.code(), 413);
+        assert_eq!(Status::PartialContent.code(), 206);
+        assert_eq!(Status::RangeNotSatisfiable.code(), 416);
         assert_eq!(Status::RequestHeaderFieldsTooLarge.code(), 431);
     }
 }

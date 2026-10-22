@@ -128,6 +128,16 @@ fn get(port: u16, target: &str) -> Vec<u8> {
     request(port, raw.as_bytes())
 }
 
+fn get_range(port: u16, target: &str, range: &str) -> Vec<u8> {
+    let raw = format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nRange: {range}\r\n\r\n");
+    request(port, raw.as_bytes())
+}
+
+fn head_range(port: u16, target: &str, range: &str) -> Vec<u8> {
+    let raw = format!("HEAD {target} HTTP/1.1\r\nHost: localhost\r\nRange: {range}\r\n\r\n");
+    request(port, raw.as_bytes())
+}
+
 fn put(port: u16, target: &str, body: &[u8]) -> Vec<u8> {
     let mut raw = format!(
         "PUT {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
@@ -251,9 +261,64 @@ fn serves_static_files_and_directory_indexes() {
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 200 OK");
     assert_eq!(header(&head, "Content-Length"), Some("40000"));
+    assert_eq!(header(&head, "Accept-Ranges"), Some("bytes"));
     assert_eq!(body.len(), 40_000);
     assert_eq!(body[0], 0);
     assert_eq!(body[39_999], (39_999u32 % 251) as u8);
+
+    let response = get_range(port, "/large.bin", "bytes=10-19");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 206 Partial Content");
+    assert_eq!(header(&head, "Content-Range"), Some("bytes 10-19/40000"));
+    assert_eq!(header(&head, "Content-Length"), Some("10"));
+    assert_eq!(header(&head, "Accept-Ranges"), Some("bytes"));
+    assert_eq!(body.len(), 10);
+    for (offset, byte) in body.iter().enumerate() {
+        assert_eq!(*byte, ((10 + offset) as u32 % 251) as u8);
+    }
+
+    let response = get_range(port, "/large.bin", "bytes=39990-");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 206 Partial Content");
+    assert_eq!(
+        header(&head, "Content-Range"),
+        Some("bytes 39990-39999/40000")
+    );
+    assert_eq!(body.len(), 10);
+
+    let response = get_range(port, "/large.bin", "bytes=-10");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 206 Partial Content");
+    assert_eq!(
+        header(&head, "Content-Range"),
+        Some("bytes 39990-39999/40000")
+    );
+    assert_eq!(body.len(), 10);
+
+    let response = get_range(port, "/large.bin", "bytes=0-0");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 206 Partial Content");
+    assert_eq!(header(&head, "Content-Range"), Some("bytes 0-0/40000"));
+    assert_eq!(body.len(), 1);
+
+    let response = get_range(port, "/large.bin", "bytes=40000-");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 416 Range Not Satisfiable");
+    assert_eq!(header(&head, "Content-Range"), Some("bytes */40000"));
+    assert_eq!(body, b"416 Range Not Satisfiable\n");
+
+    let response = head_range(port, "/large.bin", "bytes=10-19");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 206 Partial Content");
+    assert_eq!(header(&head, "Content-Range"), Some("bytes 10-19/40000"));
+    assert_eq!(header(&head, "Content-Length"), Some("10"));
+    assert_eq!(body, b"");
+
+    // Unsupported multi-ranges are ignored rather than half-implemented.
+    let response = get_range(port, "/large.bin", "bytes=0-1,3-4");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body.len(), 40_000);
 
     let response = get(port, "/huge.bin");
     let (head, body) = split(&response);

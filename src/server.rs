@@ -165,8 +165,10 @@ impl<P: Platform> Server<P> {
         };
 
         if !info.is_dir {
-            if self.send_file(stream, &mut file, rel_path, info, head_only) {
-                self.log_request(request.method, &url_path[..url_len], Status::Ok, info.len);
+            if let Some((status, length)) =
+                self.send_file(stream, &mut file, rel_path, info, request.range, head_only)
+            {
+                self.log_request(request.method, &url_path[..url_len], status, length);
             }
             return;
         }
@@ -215,19 +217,15 @@ impl<P: Platform> Server<P> {
                     self.send_error(stream, Status::NotFound, head_only, b"");
                     return;
                 }
-                if self.send_file(
+                if let Some((status, length)) = self.send_file(
                     stream,
                     &mut index_file,
                     &index_path[..index_len],
                     index_info,
+                    request.range,
                     head_only,
                 ) {
-                    self.log_request(
-                        request.method,
-                        &url_path[..url_len],
-                        Status::Ok,
-                        index_info.len,
-                    );
+                    self.log_request(request.method, &url_path[..url_len], status, length);
                 }
             }
             Err(Error::NotFound) | Err(Error::IsADirectory) => {
@@ -629,33 +627,101 @@ impl<P: Platform> Server<P> {
         }
     }
 
-    /// Write headers and, unless this is a HEAD request, stream the body.
-    /// Returns `true` once the response was accepted by the socket.
+    /// Write headers and, unless this is a HEAD request, stream the selected
+    /// byte range. Returns the status and body length on success.
     fn send_file(
         &mut self,
         stream: &mut P::Stream,
         file: &mut P::File,
         mime_path: &[u8],
         info: FileInfo,
+        range: Option<http::RangeSpec>,
         head_only: bool,
-    ) -> bool {
-        let content_type = mime::content_type(mime_path);
-        let mut header = FixedBuf::<HEADER_BUF>::new();
-        if !build_header(&mut header, Status::Ok, info.len, content_type, b"", None) {
-            let _ = self.send_fallback(stream);
-            return false;
-        }
-        if self.platform.write_all(stream, header.as_slice()).is_err() {
-            return false;
-        }
-        if head_only {
-            return true;
+    ) -> Option<(Status, u64)> {
+        let selected = match range {
+            Some(spec) => match resolve_range(spec, info.len) {
+                Some(range) => Some(range),
+                None => {
+                    self.send_range_error(stream, info.len, head_only);
+                    return None;
+                }
+            },
+            None => None,
+        };
+        let (status, start, length) = match selected {
+            Some((start, end)) => (Status::PartialContent, start, end - start + 1),
+            None => (Status::Ok, 0, info.len),
+        };
+
+        let mut content_range = FixedBuf::<96>::new();
+        if let Some((start, end)) = selected {
+            let _ = content_range.push(b"bytes ");
+            let _ = content_range.push_u64(start);
+            let _ = content_range.push_byte(b'-');
+            let _ = content_range.push_u64(end);
+            let _ = content_range.push_byte(b'/');
+            let _ = content_range.push_u64(info.len);
         }
 
-        match self.platform.send_file(stream, file, 0, info.len) {
-            Ok(sent) => sent == info.len,
-            Err(_) => false,
+        let content_type = mime::content_type(mime_path);
+        let mut header = FixedBuf::<HEADER_BUF>::new();
+        if !build_header(
+            &mut header,
+            status,
+            length,
+            content_type,
+            b"",
+            None,
+            if selected.is_some() {
+                Some(content_range.as_slice())
+            } else {
+                None
+            },
+            true,
+        ) {
+            let _ = self.send_fallback(stream);
+            return None;
         }
+        if self.platform.write_all(stream, header.as_slice()).is_err() {
+            return None;
+        }
+        if head_only {
+            return Some((status, length));
+        }
+
+        match self.platform.send_file(stream, file, start, length) {
+            Ok(sent) if sent == length => Some((status, length)),
+            _ => None,
+        }
+    }
+
+    fn send_range_error(&mut self, stream: &mut P::Stream, total: u64, head_only: bool) {
+        let body = Status::RangeNotSatisfiable.error_body();
+        let mut content_range = FixedBuf::<64>::new();
+        let _ = content_range.push(b"bytes */");
+        let _ = content_range.push_u64(total);
+
+        let mut header = FixedBuf::<HEADER_BUF>::new();
+        if !build_header(
+            &mut header,
+            Status::RangeNotSatisfiable,
+            body.len() as u64,
+            b"text/plain; charset=utf-8",
+            b"",
+            None,
+            Some(content_range.as_slice()),
+            true,
+        ) {
+            let _ = self.send_fallback(stream);
+            return;
+        }
+        if self.platform.write_all(stream, header.as_slice()).is_err() {
+            return;
+        }
+        if !head_only && !body.is_empty() && self.platform.write_all(stream, body).is_err() {
+            return;
+        }
+        self.log_error(Status::RangeNotSatisfiable);
     }
 
     fn send_redirect(&mut self, stream: &mut P::Stream, path: &[u8], head_only: bool) -> bool {
@@ -696,6 +762,8 @@ impl<P: Platform> Server<P> {
             content_type,
             allow,
             location,
+            None,
+            false,
         ) {
             let _ = self.send_fallback(stream);
             return false;
@@ -908,6 +976,36 @@ enum ReadOutcome {
     Io,
 }
 
+fn resolve_range(spec: http::RangeSpec, total: u64) -> Option<(u64, u64)> {
+    if total == 0 {
+        return None;
+    }
+    match spec {
+        http::RangeSpec::FromTo(start, end) => {
+            if start >= total {
+                None
+            } else {
+                Some((start, core::cmp::min(end, total - 1)))
+            }
+        }
+        http::RangeSpec::From(start) => {
+            if start >= total {
+                None
+            } else {
+                Some((start, total - 1))
+            }
+        }
+        http::RangeSpec::Suffix(length) => {
+            if length == 0 {
+                None
+            } else {
+                Some((total.saturating_sub(length), total - 1))
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_header(
     buffer: &mut FixedBuf<HEADER_BUF>,
     status: Status,
@@ -915,6 +1013,8 @@ fn build_header(
     content_type: &[u8],
     allow: &[u8],
     location: Option<&[u8]>,
+    content_range: Option<&[u8]>,
+    accept_ranges: bool,
 ) -> bool {
     buffer.clear();
     if !buffer.push(b"HTTP/1.1 ")
@@ -935,6 +1035,15 @@ fn build_header(
         return false;
     }
 
+    if accept_ranges && (!buffer.push(b"Accept-Ranges: bytes\r\n")) {
+        return false;
+    }
+    if let Some(content_range) = content_range {
+        if !buffer.push(b"Content-Range: ") || !buffer.push(content_range) || !buffer.push(b"\r\n")
+        {
+            return false;
+        }
+    }
     if !allow.is_empty()
         && (!buffer.push(b"Allow: ") || !buffer.push(allow) || !buffer.push(b"\r\n"))
     {
