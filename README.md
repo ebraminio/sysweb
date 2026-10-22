@@ -224,8 +224,8 @@ Current stripped sizes from this workspace:
 | Target | Size |
 | --- | ---: |
 | macOS arm64 | 66,496 B |
-| Linux x86_64 | 50,920 B |
-| Linux aarch64 | 49,128 B |
+| Linux x86_64 | 51,536 B |
+| Linux aarch64 | 50,040 B |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). Linux runtime
 tests run there; both Linux targets
