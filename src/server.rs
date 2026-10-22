@@ -7,7 +7,7 @@ use crate::listing::{self, LISTING_BUF};
 use crate::mime;
 use crate::multipart::{self, Sink, SinkError};
 use crate::path::{self, MAX_PATH, MAX_URL_PATH};
-use crate::platform::{Error, FileInfo, Platform};
+use crate::platform::{Error, FileInfo, Platform, SocketAddr};
 
 const REQUEST_BUF: usize = 8192;
 const FILE_BUF: usize = 16 * 1024;
@@ -47,19 +47,29 @@ impl<P: Platform> Server<P> {
             self.platform.exit(1)
         }
 
-        let listener = match self
-            .platform
-            .bind(self.config.addr(), self.config.backlog())
-        {
-            Ok(listener) => listener,
-            Err(_) => {
-                self.platform.log(b"syswebd: bind failed\n");
-                self.platform.exit(1)
+        let mut addr = self.config.addr();
+        let mut attempts = 0u16;
+        let listener = loop {
+            match self.platform.bind(addr, self.config.backlog()) {
+                Ok(listener) => break listener,
+                Err(Error::AddressInUse)
+                    if !self.config.port_explicit() && attempts < 100 && addr.port < u16::MAX =>
+                {
+                    if !self.config.quiet() {
+                        self.log_port_busy(addr.port);
+                    }
+                    addr.port += 1;
+                    attempts += 1;
+                }
+                Err(_) => {
+                    self.platform.log(b"syswebd: bind failed\n");
+                    self.platform.exit(1)
+                }
             }
         };
 
         if !self.config.quiet() {
-            self.log_startup();
+            self.log_startup(addr);
         }
 
         loop {
@@ -724,8 +734,17 @@ impl<P: Platform> Server<P> {
         self.platform.write_all(stream, FALLBACK_500).is_ok()
     }
 
-    fn log_startup(&mut self) {
-        let addr = self.config.addr();
+    fn log_port_busy(&mut self, port: u16) {
+        let mut line = FixedBuf::<96>::new();
+        let _ = line.push(b"syswebd: port ");
+        let _ = line.push_u64(port as u64);
+        let _ = line.push(b" is busy, trying ");
+        let _ = line.push_u64(port as u64 + 1);
+        let _ = line.push(b"\n");
+        self.platform.log(line.as_slice());
+    }
+
+    fn log_startup(&mut self, addr: SocketAddr) {
         let mut line = FixedBuf::<LOG_BUF>::new();
         let _ = line.push(b"syswebd ");
         let _ = line.push(crate::VERSION.as_bytes());

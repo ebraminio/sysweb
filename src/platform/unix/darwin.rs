@@ -102,6 +102,7 @@ fn map_errno(errno: i32) -> Error {
         13 | 62 => Error::PermissionDenied, // EACCES, ELOOP
         17 => Error::AlreadyExists,
         21 => Error::IsADirectory,
+        48 => Error::AddressInUse,
         23 | 24 => Error::TooManyOpenFiles,
         54 => Error::ConnectionReset,
         32 => Error::BrokenPipe,

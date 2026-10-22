@@ -29,6 +29,7 @@ The current release (milestone 0.5).
 - [x] Opt-in raw `PUT` uploads, folder creation, `--replace`, 1 GiB cap, and
       failed-upload cleanup.
 - [x] `301` from `/dir` to `/dir/`; `--no-index` mode.
+- [x] Default-port fallback when 8080 is busy and the port was implicit.
 - [x] HTML escaping and URL encoding for listing entries; all symlinks
       beneath the root denied.
 - [x] Percent-decoding, dot-segment normalization, traversal rejection.
@@ -91,7 +92,6 @@ Make the blocking server pleasant and safe enough to run on a LAN.
       time compare) like pad.js.
 - [ ] CORS / cross-origin isolation headers, off by default.
 - [ ] Optional path prefix and inactivity timeout.
-- [ ] Port fallback when the requested port is busy (pad.js behavior).
 - [ ] Atomic uploads: write a temp file, fsync, rename; keep `--replace`
       non-destructive on failure.
 - [ ] Upload quota / max total bytes, and a dedicated upload directory option.

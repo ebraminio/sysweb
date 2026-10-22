@@ -141,7 +141,8 @@ USAGE:
 
 OPTIONS:
     -r, --root <DIR>       Directory to serve (default: .)
-    -p, --port <PORT>      TCP port, 1-65535 (default: 8080)
+    -p, --port <PORT>      TCP port, 1-65535 (default: 8080; if omitted,
+                           a busy default falls back to the next free port)
     -H, --host <ADDR>      IPv4 address to bind (default: 127.0.0.1)
         --backlog <N>      Listen backlog (default: 128)
         --upload           Enable PUT uploads and folder creation
@@ -152,8 +153,9 @@ OPTIONS:
     -V, --version          Print the version
 ```
 
-The default bind address is loopback. Use `--host 0.0.0.0` only when you mean
-it; this server has no TLS, authentication, or rate limiting.
+The default bind address is loopback. If the default port 8080 is occupied and
+no `--port` was given, the server tries the next ports. Use `--host 0.0.0.0`
+only when you mean it; this server has no TLS, authentication, or rate limiting.
 
 ## Features
 
@@ -183,6 +185,8 @@ it; this server has no TLS, authentication, or rate limiting.
 - fixed buffers throughout: request 8 KiB, URL 1 KiB, path 1.5 KiB, header
   4 KiB, directory record 4 KiB, listing 64 KiB, file chunk 16 KiB;
 - request logging to stderr, `--quiet` to suppress it;
+- if `--port` is omitted and 8080 is busy, the server tries 8081, 8082, and so
+  on (pad.js behavior). An explicit `--port` fails instead of moving;
 - IPv4 only for now.
 
 ## Verification

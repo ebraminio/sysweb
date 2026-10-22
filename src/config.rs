@@ -64,6 +64,7 @@ pub struct Config {
     upload: bool,
     replace: bool,
     index: bool,
+    port_explicit: bool,
 }
 
 #[derive(Debug)]
@@ -86,6 +87,7 @@ impl Config {
         let mut upload = false;
         let mut replace = false;
         let mut index = true;
+        let mut port_explicit = false;
 
         let mut i = 1usize; // skip argv[0]
         while i < args.len() {
@@ -125,6 +127,7 @@ impl Config {
 
             if let Some(value) = arg.strip_prefix(b"--port=") {
                 port = parse_port(value)?;
+                port_explicit = true;
                 i += 1;
                 continue;
             }
@@ -147,6 +150,7 @@ impl Config {
             if arg == b"--port" || arg == b"-p" {
                 let value = take(args, &mut i)?;
                 port = parse_port(value)?;
+                port_explicit = true;
                 i += 1;
                 continue;
             }
@@ -184,6 +188,7 @@ impl Config {
             upload,
             replace,
             index,
+            port_explicit,
         }))
     }
 
@@ -213,6 +218,12 @@ impl Config {
 
     pub const fn index(&self) -> bool {
         self.index
+    }
+
+    /// True when the port came from `--port`; the implicit default may fall
+    /// back to the next free port.
+    pub const fn port_explicit(&self) -> bool {
+        self.port_explicit
     }
 }
 
@@ -328,6 +339,7 @@ mod tests {
         assert!(!config.upload());
         assert!(!config.replace());
         assert!(config.index());
+        assert!(!config.port_explicit());
     }
 
     #[test]
@@ -354,6 +366,7 @@ mod tests {
         assert!(config.upload());
         assert!(config.replace());
         assert!(!config.index());
+        assert!(config.port_explicit());
     }
 
     #[test]

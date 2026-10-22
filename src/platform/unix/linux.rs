@@ -159,6 +159,7 @@ fn map_errno(errno: i32) -> Error {
         40 => Error::PermissionDenied, // ELOOP: symlink with O_NOFOLLOW
         17 => Error::AlreadyExists,
         21 => Error::IsADirectory,
+        98 => Error::AddressInUse,
         23 | 24 => Error::TooManyOpenFiles,
         104 => Error::ConnectionReset,
         32 => Error::BrokenPipe,

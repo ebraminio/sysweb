@@ -138,7 +138,7 @@ contains a `<noscript>` multipart form for browsers without JavaScript.
 | Range downloads | ❌ | milestone 1 |
 | Conditional GET (`ETag`) | ❌ | milestone 1 |
 | Inactivity timeout | ❌ | milestone 1 |
-| Port fallback | ❌ | milestone 1 |
+| Port fallback | ✅ when the default port is implicit | — |
 | Path prefix | ❌ | milestone 1 |
 | Command execution | ❌ by design | never |
 | HTTPS | ❌ | reverse proxy |

@@ -24,6 +24,7 @@ pub enum Error {
     PermissionDenied,
     IsADirectory,
     AlreadyExists,
+    AddressInUse,
     TooManyOpenFiles,
     ConnectionReset,
     BrokenPipe,
