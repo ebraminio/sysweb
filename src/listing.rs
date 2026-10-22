@@ -57,7 +57,7 @@ h1 .path { color: var(--mut); font-weight: 400; }
   padding: .9rem 1rem; margin: 0 0 1rem; color: var(--mut); text-align: center;
 }
 #drop.over { border-color: var(--accent); background: var(--hover); color: var(--accent); }
-body[data-upload="1"] #drop { display: block; }
+.js-only { display: none; }
 .note { color: var(--mut); margin: 0 0 1rem; }
 .note code { color: var(--accent); }
 table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: .55rem; overflow: hidden; }
@@ -92,114 +92,183 @@ const JS: &[u8] = br###"
 (function () {
   'use strict';
   var body = document.body;
-  var path = body.dataset.path;
-  var canUpload = body.dataset.upload === '1';
-  var statusEl = document.getElementById('status');
+  if (!body) return;
 
+  function byId(id) { return document.getElementById(id); }
+  function attr(el, name) { return el && el.getAttribute ? el.getAttribute(name) : null; }
+  function setText(el, text) {
+    if (!el) return;
+    if (typeof el.textContent !== 'undefined') el.textContent = text;
+    else el.innerText = text;
+  }
   function setStatus(text) {
-    if (statusEl) statusEl.textContent = text;
+    setText(byId('status'), text);
+  }
+  function addEvent(el, type, fn) {
+    if (!el) return;
+    if (el.addEventListener) el.addEventListener(type, fn, false);
+    else if (el.attachEvent) el.attachEvent('on' + type, fn);
+  }
+  function each(list, fn) {
+    if (!list) return;
+    for (var i = 0; i < list.length; i++) fn(list[i]);
+  }
+  function eachTag(tag, fn) { each(document.getElementsByTagName(tag), fn); }
+  function hasClass(el, name) {
+    return !!(el && el.className && (' ' + el.className + ' ').indexOf(' ' + name + ' ') !== -1);
+  }
+  function addClass(el, name) {
+    if (el && !hasClass(el, name)) el.className = (el.className ? el.className + ' ' : '') + name;
+  }
+  function removeClass(el, name) {
+    if (!el || !el.className) return;
+    el.className = (' ' + el.className + ' ').replace(' ' + name + ' ', ' ').replace(/^\s+|\s+$/g, '');
+  }
+  function reveal(el, display) {
+    if (!el) return;
+    removeClass(el, 'js-only');
+    el.style.display = display || '';
+  }
+  function createXhr() {
+    if (window.XMLHttpRequest) {
+      try { return new XMLHttpRequest(); } catch (e) {}
+    }
+    if (window.ActiveXObject) {
+      try { return new ActiveXObject('Microsoft.XMLHTTP'); } catch (e) {}
+    }
+    return null;
   }
 
-  function putFile(file) {
-    return new Promise(function (resolve, reject) {
-      var xhr = new XMLHttpRequest();
-      xhr.open('PUT', path + encodeURIComponent(file.name));
+  var path = attr(body, 'data-path') || window.location.pathname;
+  var canUpload = attr(body, 'data-upload') === '1';
+
+  function putFile(file, done, fail) {
+    var xhr = createXhr();
+    if (!xhr) { fail('XMLHttpRequest is not available'); return; }
+    try { xhr.open('PUT', path + encodeURIComponent(file.name)); }
+    catch (e) { fail('Cannot start upload'); return; }
+    if (xhr.upload && xhr.upload.onprogress) {
       xhr.upload.onprogress = function (event) {
         if (event.lengthComputable) {
           setStatus(file.name + ': ' + Math.round(event.loaded * 100 / event.total) + '%');
         }
       };
-      xhr.onload = function () {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          resolve();
-        } else {
-          reject(new Error(file.name + ': ' + xhr.status + ' ' + xhr.responseText));
-        }
-      };
-      xhr.onerror = function () {
-        reject(new Error(file.name + ': network error'));
-      };
-      xhr.send(file);
-    });
+    }
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status >= 200 && xhr.status < 300) { done(); return; }
+      var text = '';
+      try { text = xhr.responseText || ''; } catch (e) {}
+      fail(file.name + ': ' + xhr.status + ' ' + text);
+    };
+    try { xhr.send(file); }
+    catch (e) { fail(file.name + ': cannot send file'); }
   }
 
   function uploadAll(files) {
-    if (!canUpload || !files || !files.length) return;
-    var chain = Promise.resolve();
-    Array.prototype.forEach.call(files, function (file) {
-      chain = chain.then(function () { return putFile(file); });
-    });
-    chain.then(function () {
-      location.reload();
-    }).catch(function (error) {
-      setStatus(String(error && error.message ? error.message : error));
-    });
+    if (!files || !files.length) return;
+    var index = 0;
+    function next() {
+      if (index >= files.length) { location.reload(); return; }
+      var file = files[index++];
+      setStatus('Uploading ' + file.name);
+      putFile(file, next, function (message) { setStatus(message); });
+    }
+    next();
   }
 
   if (canUpload) {
-    var input = document.getElementById('file');
-    if (input) {
-      input.addEventListener('change', function () { uploadAll(input.files); });
-    }
-    var mkdir = document.getElementById('mkdir');
-    if (mkdir) {
-      mkdir.addEventListener('click', function () {
+    var input = byId('file');
+    var fileApi = !!(input && input.files);
+    if (fileApi) {
+      reveal(byId('js-tools'), '');
+      if (input) addEvent(input, 'change', function () { uploadAll(input.files); });
+
+      var mkdir = byId('mkdir');
+      if (mkdir) addEvent(mkdir, 'click', function () {
         var name = prompt('Folder name');
         if (!name) return;
-        fetch(path + encodeURIComponent(name) + '/', { method: 'PUT' })
-          .then(function (response) {
-            if (response.ok) { location.reload(); return; }
-            return response.text().then(function (text) {
-              setStatus(response.status + ' ' + text);
-            });
-          })
-          .catch(function (error) { setStatus(String(error)); });
+        var xhr = createXhr();
+        if (!xhr) { setStatus('XMLHttpRequest is not available'); return; }
+        try { xhr.open('PUT', path + encodeURIComponent(name) + '/'); }
+        catch (e) { setStatus('Cannot create folder'); return; }
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState !== 4) return;
+          if (xhr.status >= 200 && xhr.status < 300) { location.reload(); return; }
+          var text = '';
+          try { text = xhr.responseText || ''; } catch (e) {}
+          setStatus(xhr.status + ' ' + text);
+        };
+        xhr.send(null);
       });
-    }
-    var drop = document.getElementById('drop');
-    if (drop) {
-      ['dragenter', 'dragover'].forEach(function (type) {
-        document.addEventListener(type, function (event) {
-          event.preventDefault();
-          drop.classList.add('over');
+
+      var drop = byId('drop');
+      if (drop) {
+        reveal(drop, 'block');
+        addEvent(document, 'dragenter', function (event) {
+          if (event.preventDefault) event.preventDefault();
+          addClass(drop, 'over');
         });
-      });
-      ['dragleave', 'drop'].forEach(function (type) {
-        document.addEventListener(type, function (event) {
-          event.preventDefault();
-          drop.classList.remove('over');
+        addEvent(document, 'dragover', function (event) {
+          if (event.preventDefault) event.preventDefault();
+          addClass(drop, 'over');
         });
-      });
-      drop.addEventListener('drop', function (event) {
-        uploadAll(event.dataTransfer && event.dataTransfer.files);
-      });
+        addEvent(document, 'dragleave', function (event) {
+          if (event.preventDefault) event.preventDefault();
+          removeClass(drop, 'over');
+        });
+        addEvent(document, 'drop', function (event) {
+          if (event.preventDefault) event.preventDefault();
+          removeClass(drop, 'over');
+          var transfer = event.dataTransfer;
+          if (transfer) uploadAll(transfer.files);
+        });
+      }
+
+      var classic = byId('classic-upload');
+      if (classic) classic.style.display = 'none';
     }
   }
 
-  document.querySelectorAll('time[data-ts]').forEach(function (node) {
-    var date = new Date(Number(node.dataset.ts) * 1000);
-    if (!isNaN(date.getTime())) node.textContent = date.toLocaleString();
+  eachTag('time', function (node) {
+    var stamp = attr(node, 'data-ts');
+    if (stamp === null || stamp === '') return;
+    var date = new Date(Number(stamp) * 1000);
+    if (!isNaN(date.getTime())) setText(node, date.toLocaleString());
   });
 
   var direction = 1;
-  document.querySelectorAll('th button[data-sort]').forEach(function (button) {
-    button.addEventListener('click', function () {
-      var key = button.dataset.sort;
-      var tbody = document.getElementById('rows');
-      var rows = Array.prototype.slice.call(
-        tbody.querySelectorAll('tr:not(.parent):not(.empty)')
-      );
-      rows.sort(function (a, b) {
-        var left = a.dataset[key] || '';
-        var right = b.dataset[key] || '';
-        if (key === 'size' || key === 'ts') {
-          return (Number(left) - Number(right)) * direction;
-        }
-        return left.toLowerCase().localeCompare(right.toLowerCase()) * direction;
-      });
-      rows.forEach(function (row) { tbody.appendChild(row); });
-      direction = -direction;
+  function rowData(row, key) {
+    var value = attr(row, 'data-' + key);
+    return value === null ? '' : value;
+  }
+  function sortBy(key) {
+    var tbody = byId('rows');
+    if (!tbody) return;
+    var rows = [];
+    var all = tbody.getElementsByTagName('tr');
+    for (var i = 0; i < all.length; i++) {
+      if (!hasClass(all[i], 'parent') && !hasClass(all[i], 'empty')) rows.push(all[i]);
+    }
+    rows.sort(function (a, b) {
+      var left = rowData(a, key);
+      var right = rowData(b, key);
+      if (key === 'size' || key === 'ts') {
+        return (Number(left) - Number(right)) * direction;
+      }
+      left = left.toLowerCase();
+      right = right.toLowerCase();
+      if (left < right) return -direction;
+      if (left > right) return direction;
+      return 0;
     });
+    for (var j = 0; j < rows.length; j++) tbody.appendChild(rows[j]);
+    direction = -direction;
+  }
+  eachTag('button', function (button) {
+    var key = attr(button, 'data-sort');
+    if (!key) return;
+    addEvent(button, 'click', function () { sortBy(key); });
   });
 })();
 "###;
@@ -250,12 +319,11 @@ pub fn render<P: Platform>(
     }
 
     if upload {
-        if !out.push(b"<noscript><style>.js-only{display:none}</style>")
-            || !out.push(b"<form class=\"tools\" method=\"post\" enctype=\"multipart/form-data\" action=\"\">")
+        if !out.push(b"<form id=\"classic-upload\" class=\"tools\" method=\"post\" enctype=\"multipart/form-data\" action=\"\">")
             || !out.push(b"<label class=\"btn primary\">Upload (form)<input type=\"file\" name=\"file\"></label>")
             || !out.push(b"<button class=\"btn\" type=\"submit\">Upload</button>")
-            || !out.push(b"</form></noscript>\n")
-            || !out.push(b"<div class=\"tools js-only\">")
+            || !out.push(b"</form>\n")
+            || !out.push(b"<div id=\"js-tools\" class=\"tools js-only\">")
             || !out.push(
                 b"<label class=\"btn primary\">Upload<input id=\"file\" type=\"file\" multiple></label>",
             )

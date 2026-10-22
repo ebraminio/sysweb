@@ -539,9 +539,17 @@ fn multipart_forms_work_for_old_browsers() {
     let server = start_server(&["--upload"]);
     let port = server.port;
 
-    // The page contains a no-JavaScript multipart form.
+    // The page contains a classic multipart form and the inline JS stays in
+    // the ES3/feature-detected subset so old browsers do not fail parsing.
     let page = text(&get(port, "/assets/"));
     assert!(page.contains("enctype=\"multipart/form-data\""));
+    assert!(page.contains("id=\"classic-upload\""));
+    assert!(!page.contains("Promise"));
+    assert!(!page.contains("querySelectorAll"));
+    assert!(!page.contains("dataset"));
+    assert!(!page.contains("classList"));
+    assert!(!page.contains("fetch("));
+    assert!(!page.contains("=>"));
 
     // Classic form post to a directory: filename comes from the part.
     let body = multipart_body("----syswebForm", "old.txt", b"hello from a form");
