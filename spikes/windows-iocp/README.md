@@ -5,17 +5,17 @@ as the no-CRT entry/link spike.
 
 It self-tests one loopback connection:
 
-1. `WSAStartup`, listener/client sockets, `bind`, `listen`, `connect`, `accept`;
-2. create an IOCP and associate the accepted socket;
-3. post an overlapped `WSARecv`, send `ping` from the client, wait for the
+1. `WSAStartup`, listener/client sockets, `bind`, `listen`, `connect`;
+2. create an IOCP and associate both the listener and the accept socket;
+3. post an overlapped `AcceptEx`, connect the client, and wait for completion;
+4. post an overlapped `WSARecv`, send `ping` from the client, wait for the
    completion, and verify the bytes;
-4. post an overlapped `WSASend`, wait for the completion, and verify `pong` on
+5. post an overlapped `WSASend`, wait for the completion, and verify `pong` on
    the client.
 
-This validates the Windows completion model and the `WSARecv`/`WSASend`
-overlapped ABI without the CRT. `accept` is still blocking in this spike, and
-`AcceptEx`, socket state, and the real connection state machine remain for the
-backend after the Unix async reactor.
+This validates the Windows completion model, `AcceptEx`, and the
+`WSARecv`/`WSASend` overlapped ABI without the CRT. Socket state and the real
+connection state machine remain for the backend after the Unix async reactor.
 
 Build and inspect the PE:
 
@@ -28,7 +28,7 @@ The stripped PE imports only `KERNEL32.dll` and `WS2_32.dll`. On the Windows
 test machine it prints:
 
 ```text
-iocp: WSARecv/WSASend completion ok
+iocp: AcceptEx/WSARecv/WSASend completion ok
 ```
 
 The toolchain used here is the persistent user-level `~/.rustup`/`~/.cargo`

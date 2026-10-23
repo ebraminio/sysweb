@@ -79,11 +79,11 @@ Windows backend. Two spikes are already validated:
 - [`spikes/windows-no-crt`](spikes/windows-no-crt/) builds a 3,584-byte x86_64
   PE importing only `KERNEL32.dll`;
 - [`spikes/windows-iocp`](spikes/windows-iocp/) uses a completion port with
-  overlapped `WSARecv`/`WSASend` over a loopback connection; its stripped PE
-  imports only `KERNEL32.dll` and `WS2_32.dll`.
+  overlapped `AcceptEx`, `WSARecv`, and `WSASend` over a loopback connection;
+  its stripped PE imports only `KERNEL32.dll` and `WS2_32.dll`.
 
-Both ran on Windows 11. The IOCP spike still uses blocking `accept`; `AcceptEx`
-and the server state machine land with the real backend.
+Both ran on Windows 11. Socket state and the server state machine still land
+with the real Windows backend.
 
 ### Latest-API policy
 

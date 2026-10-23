@@ -589,11 +589,12 @@ was verified. `/FIXED` only fixes the base; a one-section image additionally
 needs lld-link `/MERGE` (verified with a 1,024-byte C probe). The Rust spike
 keeps relocations for robustness.
 
-`spikes/windows-iocp` goes one step further: it creates an IOCP, associates an
-accepted loopback socket, posts an overlapped `WSARecv`, waits for completion,
-posts an overlapped `WSASend`, waits, and verifies the reply. Its stripped
-5,632-byte PE imports only `KERNEL32.dll` and `WS2_32.dll`. `accept` is still
-blocking; `AcceptEx`, socket state, and file I/O remain for the real backend.
+`spikes/windows-iocp` goes one step further: it creates an IOCP, associates
+the listener and accept socket, posts an overlapped `AcceptEx`, waits for the
+connection, posts an overlapped `WSARecv`, waits, posts an overlapped
+`WSASend`, waits, and verifies the reply. Its stripped PE imports only
+`KERNEL32.dll` and `WS2_32.dll`. Socket state and file I/O remain for the real
+backend.
 
 - `#![no_main]`, export `mainCRTStartup` as the entry point.
 - Link with `/NODEFAULTLIB` and explicit `kernel32.lib` / `ws2_32.lib`; provide

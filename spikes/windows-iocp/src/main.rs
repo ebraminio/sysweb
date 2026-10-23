@@ -20,7 +20,36 @@ const INVALID_SOCKET: usize = usize::MAX;
 const SOCKET_ERROR: i32 = -1;
 const WSA_IO_PENDING: i32 = 997;
 const INFINITE: u32 = 0xffff_ffff;
+const WAIT_MS: u32 = 5000;
 const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+const WSA_FLAG_OVERLAPPED: u32 = 1;
+const SIO_GET_EXTENSION_FUNCTION_POINTER: u32 = 0xc8000006;
+
+#[repr(C)]
+struct Guid {
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
+
+const WSAID_ACCEPTEX: Guid = Guid {
+    data1: 0xb5367df1,
+    data2: 0xcbac,
+    data3: 0x11cf,
+    data4: [0x95, 0xca, 0x00, 0x80, 0x5f, 0x48, 0xa1, 0x92],
+};
+
+type AcceptExFn = unsafe extern "system" fn(
+    listener: usize,
+    accept_socket: usize,
+    output: *mut c_void,
+    receive_length: u32,
+    local_length: u32,
+    remote_length: u32,
+    bytes: *mut u32,
+    overlapped: *mut Overlapped,
+) -> i32;
 
 #[repr(C, align(8))]
 struct WsaData([u8; 512]);
@@ -54,9 +83,27 @@ unsafe extern "system" {
     fn WSACleanup() -> i32;
     fn WSAGetLastError() -> i32;
     fn socket(af: i32, ty: i32, protocol: i32) -> usize;
+    fn WSASocketW(
+        af: i32,
+        ty: i32,
+        protocol: i32,
+        protocol_info: *mut c_void,
+        group: u32,
+        flags: u32,
+    ) -> usize;
+    fn WSAIoctl(
+        s: usize,
+        code: u32,
+        in_buffer: *mut c_void,
+        in_size: u32,
+        out_buffer: *mut c_void,
+        out_size: u32,
+        bytes: *mut u32,
+        overlapped: *mut c_void,
+        completion: *mut c_void,
+    ) -> i32;
     fn bind(s: usize, name: *const SockaddrIn, len: i32) -> i32;
     fn listen(s: usize, backlog: i32) -> i32;
-    fn accept(s: usize, addr: *mut SockaddrIn, len: *mut i32) -> usize;
     fn connect(s: usize, name: *const SockaddrIn, len: i32) -> i32;
     fn getsockname(s: usize, name: *mut SockaddrIn, len: *mut i32) -> i32;
     fn send(s: usize, buf: *const u8, len: i32, flags: i32) -> i32;
@@ -146,7 +193,7 @@ fn wait(port: *mut c_void, expected: *mut Overlapped) -> u32 {
     let mut key = 0usize;
     let mut overlapped: *mut Overlapped = null_mut();
     if unsafe {
-        GetQueuedCompletionStatus(port, &mut bytes, &mut key, &mut overlapped, INFINITE)
+        GetQueuedCompletionStatus(port, &mut bytes, &mut key, &mut overlapped, WAIT_MS)
     } == 0
     {
         fail(b"iocp: GetQueuedCompletionStatus failed\n");
@@ -164,7 +211,16 @@ pub extern "system" fn mainCRTStartup() -> ! {
         fail(b"iocp: WSAStartup failed\n");
     }
 
-    let listener = unsafe { socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) };
+    let listener = unsafe {
+        WSASocketW(
+            AF_INET,
+            SOCK_STREAM,
+            IPPROTO_TCP,
+            null_mut(),
+            0,
+            WSA_FLAG_OVERLAPPED,
+        )
+    };
     if listener == INVALID_SOCKET {
         fail(b"iocp: listener socket failed\n");
     }
@@ -183,26 +239,78 @@ pub extern "system" fn mainCRTStartup() -> ! {
     }
     let port = u16::from_be(local.port);
 
+    let port_handle = unsafe { CreateIoCompletionPort((-1isize) as *mut c_void, null_mut(), 0, 0) };
+    if port_handle.is_null() {
+        fail(b"iocp: completion port creation failed\n");
+    }
+
+    if unsafe { CreateIoCompletionPort(listener as *mut c_void, port_handle, 0, 0) }.is_null() {
+        fail(b"iocp: listener association failed\n");
+    }
+
+    let mut accept_ex: AcceptExFn = unsafe { core::mem::transmute(core::ptr::null::<c_void>()) };
+    let mut accept_ex_bytes = 0u32;
+    if unsafe {
+        WSAIoctl(
+            listener,
+            SIO_GET_EXTENSION_FUNCTION_POINTER,
+            &WSAID_ACCEPTEX as *const Guid as *mut c_void,
+            16,
+            &mut accept_ex as *mut AcceptExFn as *mut c_void,
+            8,
+            &mut accept_ex_bytes,
+            null_mut(),
+            null_mut(),
+        )
+    } == SOCKET_ERROR
+        || accept_ex_bytes != 8
+    {
+        fail(b"iocp: AcceptEx lookup failed\n");
+    }
+
+    let server = unsafe { WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, null_mut(), 0, WSA_FLAG_OVERLAPPED) };
+    if server == INVALID_SOCKET {
+        fail(b"iocp: accept socket failed\n");
+    }
+    if unsafe { CreateIoCompletionPort(server as *mut c_void, port_handle, 1, 0) }.is_null() {
+        fail(b"iocp: socket association failed\n");
+    }
+
     let client = unsafe { socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) };
     if client == INVALID_SOCKET {
         fail(b"iocp: client socket failed\n");
     }
     let target = loopback(port);
+
+    let mut accept_buffer = [0u8; 64];
+    let mut accept_overlapped = Overlapped {
+        internal: 0,
+        internal_high: 0,
+        offset: 0,
+        offset_high: 0,
+        event: null_mut(),
+    };
+    let accept_result = unsafe {
+        accept_ex(
+            listener,
+            server,
+            accept_buffer.as_mut_ptr() as *mut c_void,
+            0,
+            32,
+            32,
+            null_mut(),
+            &mut accept_overlapped,
+        )
+    };
+    if accept_result == 0 && unsafe { WSAGetLastError() } != WSA_IO_PENDING {
+        fail(b"iocp: AcceptEx post failed\n");
+    }
     if unsafe { connect(client, &target, 16) } == SOCKET_ERROR {
         fail(b"iocp: connect failed\n");
     }
-    let server = unsafe { accept(listener, null_mut(), null_mut()) };
-    if server == INVALID_SOCKET {
-        fail(b"iocp: accept failed\n");
-    }
-
-    let port_handle = unsafe { CreateIoCompletionPort((-1isize) as *mut c_void, null_mut(), 0, 0) };
-    if port_handle.is_null() {
-        fail(b"iocp: completion port creation failed\n");
-    }
-    if unsafe { CreateIoCompletionPort(server as *mut c_void, port_handle, 1, 0) }.is_null() {
-        fail(b"iocp: socket association failed\n");
-    }
+    out(b"iocp: waiting for AcceptEx\n");
+    let accepted = wait(port_handle, &mut accept_overlapped);
+    let _ = accepted;
 
     let mut recv_buffer = [0u8; 64];
     let recv_wsa = WsaBuf {
@@ -239,6 +347,7 @@ pub extern "system" fn mainCRTStartup() -> ! {
     if unsafe { send(client, ping.as_ptr(), ping.len() as i32, 0) } != ping.len() as i32 {
         fail(b"iocp: client send failed\n");
     }
+    out(b"iocp: waiting for WSARecv\n");
     let received = wait(port_handle, &mut recv_overlapped);
     if received != ping.len() as u32 || &recv_buffer[..received as usize] != ping {
         fail(b"iocp: WSARecv data mismatch\n");
@@ -304,7 +413,7 @@ pub extern "system" fn mainCRTStartup() -> ! {
         let _ = closesocket(listener);
         let _ = WSACleanup();
     }
-    out(b"iocp: WSARecv/WSASend completion ok\n");
+    out(b"iocp: AcceptEx/WSARecv/WSASend completion ok\n");
     unsafe { ExitProcess(0) }
 }
 
