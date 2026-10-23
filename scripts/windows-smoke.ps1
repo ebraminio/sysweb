@@ -64,6 +64,15 @@ try {
     if ($r2.Head -notmatch 'Connection: close') { throw "close response header missing" }
     $ka.Close()
 
+    # A second instance must not be able to bind the same port.
+    $second = Start-Process -FilePath $Exe `
+        -ArgumentList "--root", $root, "--port", $Port, "--quiet" -PassThru `
+        -RedirectStandardError (Join-Path $base "sysweb-second.err")
+    if (-not $second.WaitForExit(2000)) {
+        Stop-Process -Id $second.Id -Force
+        throw "second instance bound the same port"
+    }
+
     $put = Invoke-WebRequest -UseBasicParsing -Method Put -Body "put smoke" `
         "http://127.0.0.1:$Port/put.txt"
     if ($put.StatusCode -ne 201) { throw "PUT failed" }

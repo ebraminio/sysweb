@@ -17,7 +17,7 @@ const AF_INET: i32 = 2;
 const SOCK_STREAM: i32 = 1;
 const IPPROTO_TCP: i32 = 6;
 const SOL_SOCKET: i32 = 0xffff;
-const SO_REUSEADDR: i32 = 4;
+const SO_EXCLUSIVEADDRUSE: i32 = -5;
 const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
 const FILE_SHARE_READ: u32 = 1;
@@ -607,15 +607,20 @@ impl Platform for Sys {
             return Err(Self::last_wsa());
         }
         let one: i32 = 1;
-        unsafe {
+        if unsafe {
             setsockopt(
                 fd,
                 SOL_SOCKET,
-                SO_REUSEADDR,
+                SO_EXCLUSIVEADDRUSE,
                 &one as *const i32 as *const u8,
                 4,
             )
-        };
+        } == SOCKET_ERROR
+        {
+            let error = Self::last_wsa();
+            unsafe { closesocket(fd) };
+            return Err(error);
+        }
         let address = sockaddr(addr);
         if unsafe { bind(fd, &address, core::mem::size_of::<SockaddrIn>() as i32) } == SOCKET_ERROR
         {
