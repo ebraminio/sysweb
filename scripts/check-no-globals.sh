@@ -8,7 +8,7 @@
 # `&'static` lifetimes/string literals are not variables.
 set -eu
 
-roots="src spikes/windows-no-crt/src"
+roots="src spikes/windows-no-crt/src spikes/windows-iocp/src"
 hits="$(grep -RInE '^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?(unsafe[[:space:]]+)?static[[:space:]]+(mut[[:space:]]+)?[A-Za-z_]' $roots 2>/dev/null || true)"
 threads="$(grep -RInE 'thread_local![[:space:]]*\(' $roots 2>/dev/null || true)"
 if [ -n "$threads" ]; then

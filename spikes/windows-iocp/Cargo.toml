@@ -1,0 +1,17 @@
+[package]
+name = "windows-iocp-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "windows-iocp-spike"
+path = "src/main.rs"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+strip = false
+
+[workspace]

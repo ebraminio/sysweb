@@ -7,3 +7,4 @@
 /fuzz/coverage
 /fuzz/corpus
 /spikes/windows-no-crt/target
+/spikes/windows-iocp/target
