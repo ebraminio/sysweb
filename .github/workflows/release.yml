@@ -20,8 +20,6 @@ jobs:
   build:
     name: build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    env:
-      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ld.lld
     strategy:
       fail-fast: false
       matrix:
@@ -52,6 +50,10 @@ jobs:
 
       - name: Tests (release + LTO)
         run: cargo test --release --target ${{ matrix.target }} -- --test-threads=1
+
+      - name: Relink release with lld (aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: cargo rustc --release --target ${{ matrix.target }} --bin syswebd -- -C linker=ld.lld
 
       - name: Verify no external runtime dependencies
         run: ./scripts/check-binary.sh target/${{ matrix.target }}/release/syswebd
