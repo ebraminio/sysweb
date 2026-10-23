@@ -14,7 +14,7 @@ fn main() {
             // No crt1.o/crti.o, no -lc, no -lgcc: only our objects and the
             // Rust core/compiler_builtins rlibs. _start lives in the binary.
             // `-nostdlib` implies `-nostartfiles` for both gcc and lld.
-            for arg in ["-nostdlib", "-static", "-no-pie", "-Wl,--gc-sections"] {
+            for arg in ["-nostdlib", "-static", "-no-pie"] {
                 println!("cargo:rustc-link-arg-bin=syswebd={arg}");
             }
         }
