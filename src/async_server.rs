@@ -15,7 +15,7 @@ use crate::path::{self, MAX_PATH, MAX_URL_PATH};
 use crate::platform::{AsyncPlatform, Error, Event, Interest};
 use crate::server::{build_header, resolve_range, root_relative, HEADER_BUF, REQUEST_BUF};
 
-const MAX_CONNECTIONS: usize = 8;
+const MAX_CONNECTIONS: usize = 16;
 const RESPONSE_BUF: usize = LISTING_BUF + HEADER_BUF;
 const EVENT_BATCH: usize = 64;
 const TICK_MS: i32 = 1000;
