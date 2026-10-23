@@ -62,6 +62,18 @@ try {
         if ($load.StatusCode -ne 200) { throw "sequential load failed" }
     }
 
+    # A stalled large download must not prevent another request.
+    $large = New-Object byte[] (2 * 1024 * 1024)
+    [IO.File]::WriteAllBytes((Join-Path $root "large.bin"), $large)
+    $slow = [System.Net.Sockets.TcpClient]::new("127.0.0.1", $Port)
+    $slowStream = $slow.GetStream()
+    $request = [Text.Encoding]::ASCII.GetBytes("GET /large.bin HTTP/1.1`r`nHost: x`r`n`r`n")
+    $slowStream.Write($request, 0, $request.Length)
+    Start-Sleep -Milliseconds 100
+    $live = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$Port/hello.txt"
+    if ($live.StatusCode -ne 200) { throw "stalled download blocked the server" }
+    $slow.Close()
+
     # Idle deadline: a partial request must be closed.
     $idlePort = $Port + 1
     $idleProc = Start-Process -FilePath $Exe `
