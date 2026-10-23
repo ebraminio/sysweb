@@ -315,7 +315,17 @@ const JS: &[u8] = br###"
     }
   }
 
-  eachTag('time', function (node) {
+  // IE8/old engines render <details> children raw. Hide the transfer section
+  // unless the native details/summary toggle exists.
+  var transfer = byId('transfer');
+  if (transfer && !('open' in document.createElement('details'))) {
+    try { transfer.style.display = 'none'; } catch (e) {}
+  }
+
+  // IE8 treats <time> as HTMLUnknownElement and throws "Unknown runtime
+  // error" when innerText is assigned, so timestamps use a normal span.
+  eachTag('span', function (node) {
+    if (!hasClass(node, 'time')) return;
     var stamp = attr(node, 'data-ts');
     if (stamp === null || stamp === '') return;
     var date = new Date(Number(stamp) * 1000);
@@ -389,7 +399,7 @@ pub fn render<P: Platform>(
         || !escape_html(out, url_path)
         || !out.push(b"</title>\n<style>")
         || !out.push(CSS)
-        || !out.push(b"</style>\n</head>\n<body data-path=\"")
+        || !out.push(b"</style>\n<!--[if lt IE 9]><style>#transfer{display:none}</style><![endif]-->\n</head>\n<body data-path=\"")
         || !out.push(encoded_path.as_slice())
         || !out.push(b"\" data-upload=\"")
         || !out.push(if upload { b"1" } else { b"0" })
@@ -480,7 +490,7 @@ pub fn render<P: Platform>(
         || !out.push(b"sysweb ")
         || !out.push(crate::VERSION.as_bytes())
         || !out.push(b" &middot; no_std &middot; no alloc &middot; syscalls")
-        || !out.push(b"</footer>\n<details><summary>Terminal transfer</summary><pre>")
+        || !out.push(b"</footer>\n<details id=\"transfer\"><summary>Terminal transfer</summary><pre>")
         || !out.push(b"# upload (when --upload is enabled)\ncurl -T FILE URL\n\n")
         || !out.push(b"# Windows PowerShell (multipart POST; needs --upload)\n$f = \"C:\\filename.bin\"\n$w = New-Object System.Net.WebClient\n$w.UploadFile(\"URL\", $f)\n\n")
         || !out.push(b"# download\ncurl -O URL</pre></details>\n<script>")
@@ -625,11 +635,11 @@ fn render_entry<const N: usize>(
         }
     }
 
-    if !out.push(b"</td><td class=\"modified\"><time data-ts=\"")
+    if !out.push(b"</td><td class=\"modified\"><span class=\"time\" data-ts=\"")
         || !out.push_u64(entry.mtime.max(0) as u64)
         || !out.push(b"\">")
         || !out.push(&time_buf[..time_len])
-        || !out.push(b"</time></td><td class=\"size\">")
+        || !out.push(b"</span></td><td class=\"size\">")
         || !out.push(size)
         || !out.push(b"</td><td class=\"type\">")
         || !out.push(display_type)
