@@ -20,6 +20,8 @@ jobs:
   build:
     name: build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ld.lld
     strategy:
       fail-fast: false
       matrix:
