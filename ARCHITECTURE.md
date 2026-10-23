@@ -584,6 +584,11 @@ need incremental state.
 
 ## Windows plan (milestone 2)
 
+A CRT-free Win32 **blocking** backend now exists for bring-up. It covers paths,
+files, directories, uploads, and sockets and runs on Windows 11. The final
+Windows backend is still IOCP; the blocking path is a validation step, not the
+async endpoint.
+
 A no-CRT entry/link spike lives in `spikes/windows-no-crt`: a 3,584-byte x86_64
 PE with a custom `mainCRTStartup`, no CRT, and only `KERNEL32.dll` imports
 (`ExitProcess`, `GetStdHandle`, `WriteFile`). It was run on Windows 11. The

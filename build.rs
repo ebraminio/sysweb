@@ -18,6 +18,26 @@ fn main() {
                 println!("cargo:rustc-link-arg-bin=syswebd={arg}");
             }
         }
+        "windows" => {
+            let args: &[&str] = match std::env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+                Ok("msvc") => &[
+                    "/NODEFAULTLIB",
+                    "/ENTRY:mainCRTStartup",
+                    "/SUBSYSTEM:CONSOLE,6.0",
+                    "/MACHINE:X64",
+                ],
+                _ => &[
+                    "-nostdlib",
+                    "-Wl,--entry=mainCRTStartup",
+                    "-Wl,--subsystem,console",
+                    "-Wl,--major-subsystem-version,6",
+                    "-Wl,--minor-subsystem-version,0",
+                ],
+            };
+            for arg in args {
+                println!("cargo:rustc-link-arg-bin=syswebd={arg}");
+            }
+        }
         "macos" => {
             // ld64 refuses to produce a dynamic executable without a
             // libSystem load command. We import no symbols from it (mem* is

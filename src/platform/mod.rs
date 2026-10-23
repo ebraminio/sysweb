@@ -9,9 +9,15 @@
 //! to grow a reactor (`io_uring`/`kqueue`/IOCP) for the async milestone; see
 //! `ARCHITECTURE.md`.
 
+#[cfg(unix)]
 pub mod unix;
+#[cfg(windows)]
+pub mod windows;
 
+#[cfg(unix)]
 pub use unix::{exit, write_stderr, write_stdout, Sys};
+#[cfg(windows)]
+pub use windows::{exit, write_stderr, write_stdout, Sys};
 
 /// A normalized error from the platform layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

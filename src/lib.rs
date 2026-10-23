@@ -50,9 +50,17 @@ pub fn run(args: &[&[u8]]) -> ! {
         Ok(ParseOutcome::Run(config)) => {
             let async_mode = config.async_mode();
             let mut server = Server::new(platform::Sys::new(), config);
-            if async_mode {
-                server.run_async()
-            } else {
+            #[cfg(unix)]
+            {
+                if async_mode {
+                    server.run_async()
+                } else {
+                    server.run()
+                }
+            }
+            #[cfg(windows)]
+            {
+                let _ = async_mode;
                 server.run()
             }
         }

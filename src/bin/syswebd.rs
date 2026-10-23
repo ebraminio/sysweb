@@ -18,6 +18,80 @@
 use core::ffi::c_void;
 use core::panic::PanicInfo;
 
+#[cfg(target_os = "windows")]
+#[link(name = "shell32")]
+unsafe extern "system" {
+    fn CommandLineToArgvW(command: *const u16, argc: *mut i32) -> *mut *mut u16;
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetCommandLineW() -> *const u16;
+    fn LocalFree(pointer: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+}
+
+#[cfg(target_os = "windows")]
+#[no_mangle]
+pub extern "system" fn mainCRTStartup() -> ! {
+    let mut storage = [[0u8; 4096]; 32];
+    let mut starts: [*const u8; 32] = [core::ptr::null(); 32];
+    let mut lengths = [0usize; 32];
+    let mut count = 0usize;
+    unsafe {
+        let mut argc = 0i32;
+        let argv = CommandLineToArgvW(GetCommandLineW(), &mut argc);
+        if !argv.is_null() {
+            let limit = core::cmp::min(argc.max(0) as usize, 32);
+            while count < limit {
+                let wide = *argv.add(count);
+                let mut len = 0usize;
+                while len < 4095 && *wide.add(len) != 0 {
+                    len += 1;
+                }
+                let converted = WideCharToMultiByte(
+                    65001,
+                    0,
+                    wide,
+                    len as i32,
+                    storage[count].as_mut_ptr(),
+                    4095,
+                    core::ptr::null(),
+                    core::ptr::null_mut(),
+                );
+                if converted <= 0 {
+                    break;
+                }
+                starts[count] = storage[count].as_ptr();
+                lengths[count] = converted as usize;
+                count += 1;
+            }
+            let _ = LocalFree(argv as *mut core::ffi::c_void);
+        }
+        let _ = argc;
+    }
+    let mut args: [&[u8]; 32] = [&[]; 32];
+    for index in 0..count {
+        args[index] = unsafe { core::slice::from_raw_parts(starts[index], lengths[index]) };
+    }
+    sysweb::run(&args[..count])
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn WideCharToMultiByte(
+        page: u32,
+        flags: u32,
+        input: *const u16,
+        input_len: i32,
+        output: *mut u8,
+        output_len: i32,
+        default: *const u8,
+        used: *mut i32,
+    ) -> i32;
+}
+
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn main(argc: i32, argv: *const *const u8) -> ! {
