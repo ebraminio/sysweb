@@ -36,6 +36,7 @@ enum State {
     SendingFile,
     SendingContinue,
     ReadingBody,
+    Draining,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -153,6 +154,7 @@ struct Slot<P: AsyncPlatform> {
     upload: Option<Upload<P>>,
     body: [u8; BODY_BUF],
     continue_pos: usize,
+    drain_remaining: u64,
     head_only: bool,
     status: Status,
     log_method: Method,
@@ -179,6 +181,7 @@ impl<P: AsyncPlatform> Slot<P> {
             upload: None,
             body: [0; BODY_BUF],
             continue_pos: 0,
+            drain_remaining: 0,
             head_only: false,
             status: Status::Ok,
             log_method: Method::Get,
@@ -201,6 +204,7 @@ impl<P: AsyncPlatform> Slot<P> {
         self.file_remaining = 0;
         self.upload = None;
         self.continue_pos = 0;
+        self.drain_remaining = 0;
         self.head_only = false;
         self.status = Status::Ok;
         self.log_method = Method::Get;
@@ -474,6 +478,7 @@ fn handle_event<P: AsyncPlatform>(
             write_continue_slot(platform, poller, &mut slots[index], index + 1)
         }
         State::ReadingBody => read_body_slot(platform, poller, &mut slots[index], index + 1),
+        State::Draining => drain_slot(platform, poller, &mut slots[index], index + 1),
         State::Idle => {}
     }
 }
@@ -724,6 +729,9 @@ fn prepare_put<P: AsyncPlatform>(
 ) {
     if !config.upload() {
         slot.prepare_error_allow(Status::MethodNotAllowed, false, ALLOW_READ);
+        slot.drain_remaining = content_length
+            .unwrap_or(0)
+            .saturating_sub((request_len - body_offset) as u64);
         return;
     }
     let url_len = url_path.len();
@@ -851,6 +859,9 @@ fn prepare_post<P: AsyncPlatform>(
 ) {
     if !config.upload() {
         slot.prepare_error_allow(Status::MethodNotAllowed, false, ALLOW_READ);
+        slot.drain_remaining = content_length
+            .unwrap_or(0)
+            .saturating_sub((request_len - body_offset) as u64);
         return;
     }
     let Some(total) = content_length else {
@@ -1293,6 +1304,14 @@ fn write_slot<P: AsyncPlatform>(
         {
             close_slot(platform, poller, slot, token);
         }
+    } else if slot.drain_remaining > 0 {
+        slot.state = State::Draining;
+        if platform
+            .set_interest(poller, stream, token, Interest::Readable)
+            .is_err()
+        {
+            close_slot(platform, poller, slot, token);
+        }
     } else {
         close_slot(platform, poller, slot, token);
     }
@@ -1339,6 +1358,38 @@ fn send_file_slot<P: AsyncPlatform>(
     }
 }
 
+fn drain_slot<P: AsyncPlatform>(
+    platform: &mut P,
+    poller: &mut P::Poller,
+    slot: &mut Slot<P>,
+    token: usize,
+) {
+    loop {
+        if slot.drain_remaining == 0 {
+            close_slot(platform, poller, slot, token);
+            return;
+        }
+        let want = core::cmp::min(slot.drain_remaining, slot.body.len() as u64) as usize;
+        let stream = match slot.stream.as_mut() {
+            Some(stream) => stream,
+            None => return,
+        };
+        match platform.read_nonblocking(stream, &mut slot.body[..want]) {
+            Ok(0) => {
+                close_slot(platform, poller, slot, token);
+                return;
+            }
+            Ok(count) => slot.drain_remaining -= count as u64,
+            Err(Error::Interrupted) => continue,
+            Err(Error::WouldBlock) => return,
+            Err(_) => {
+                close_slot(platform, poller, slot, token);
+                return;
+            }
+        }
+    }
+}
+
 fn transition<P: AsyncPlatform>(
     platform: &mut P,
     poller: &mut P::Poller,
@@ -1349,7 +1400,10 @@ fn transition<P: AsyncPlatform>(
         State::SendingContinue => Interest::Writable,
         State::ReadingBody => Interest::Readable,
         State::Writing => {
-            if slot.file_remaining == 0 && slot.response_pos >= slot.response_len {
+            if slot.file_remaining == 0
+                && slot.response_pos >= slot.response_len
+                && slot.drain_remaining == 0
+            {
                 close_slot(platform, poller, slot, token);
                 return;
             }
