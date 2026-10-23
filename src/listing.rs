@@ -64,8 +64,8 @@ td.size, td.type { white-space: nowrap; }
 td.size { text-align: right; font-variant-numeric: tabular-nums; }
 td.modified { white-space: nowrap; }
 tr.empty td { text-align: center; padding: 1.4rem; }
-footer { margin-top: 1.4rem; font-size: .92em; }
-details { margin-top: 1rem; }
+footer { margin-top: 1.4rem; font-size: .92em; padding: 0 1.2rem; }
+details { margin-top: 1rem; padding: 0 1.2rem; }
 summary { cursor: pointer; }
 pre { background: #ffffff; border: 1px solid #d9dde4; border-radius: .45rem; padding: .7rem .8rem; overflow-x: auto; }
 .crumb, .sep, #status, .note, th, td.size, td.type, td.modified, tr.empty td, footer, summary, h1 .path, td.name .symlink { color: #5f6672; }
