@@ -22,6 +22,7 @@ const BODY_BUF: usize = 16 * 1024;
 const CONTINUE: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
 const UPLOADED: &[u8] = b"UPLOADED\n";
 const CREATED: &[u8] = b"CREATED\n";
+const ALLOW_READ: &[u8] = b"GET, HEAD";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
@@ -242,6 +243,35 @@ impl<P: AsyncPlatform> Slot<P> {
         true
     }
 
+    fn prepare_error_allow(&mut self, status: Status, head_only: bool, allow: &[u8]) {
+        let body = status.error_body();
+        let mut header = FixedBuf::<HEADER_BUF>::new();
+        if !build_header(
+            &mut header,
+            status,
+            body.len() as u64,
+            b"text/plain; charset=utf-8",
+            allow,
+            None,
+            None,
+            false,
+        ) {
+            return;
+        }
+        let header = header.as_slice();
+        self.response[..header.len()].copy_from_slice(header);
+        let mut len = header.len();
+        if !head_only && !body.is_empty() {
+            self.response[len..len + body.len()].copy_from_slice(body);
+            len += body.len();
+        }
+        self.response_len = len;
+        self.response_pos = 0;
+        self.head_only = head_only;
+        self.status = status;
+        self.state = State::Writing;
+    }
+
     fn prepare_error(&mut self, status: Status, head_only: bool) {
         let body = status.error_body();
         let _ = self.prepare_response(
@@ -307,7 +337,7 @@ pub fn run<P: AsyncPlatform>(mut platform: P, config: Config) -> ! {
         let _ = line.push_ipv4(addr.ip);
         let _ = line.push_byte(b':');
         let _ = line.push_u64(addr.port as u64);
-        let _ = line.push(b" (async GET/HEAD, root: ");
+        let _ = line.push(b" (async, root: ");
         let _ = line.push(config.root());
         let _ = line.push(b")\n");
         platform.log(line.as_slice());
@@ -446,7 +476,7 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
     let request = match http::parse(&slot.request[..slot.request_len]) {
         Ok(request) => request,
         Err(http::ParseError::UnsupportedMethod) => {
-            slot.prepare_error(Status::MethodNotAllowed, false);
+            slot.prepare_error_allow(Status::MethodNotAllowed, false, ALLOW_READ);
             return;
         }
         Err(http::ParseError::UnsupportedVersion) => {
@@ -522,7 +552,7 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
         return;
     }
     if method != Method::Get && method != Method::Head {
-        slot.prepare_error(Status::MethodNotAllowed, false);
+        slot.prepare_error_allow(Status::MethodNotAllowed, false, ALLOW_READ);
         return;
     }
 
@@ -619,7 +649,14 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
                 slot.prepare_error(Status::Forbidden, head_only);
                 return;
             }
-            serve_listing(platform, slot, &url_path[..url_len], rel_path, head_only);
+            serve_listing(
+                platform,
+                slot,
+                &url_path[..url_len],
+                rel_path,
+                config.upload(),
+                head_only,
+            );
         }
         Err(Error::PermissionDenied) => slot.prepare_error(Status::Forbidden, head_only),
         Err(_) => slot.prepare_error(Status::InternalServerError, head_only),
@@ -638,7 +675,7 @@ fn prepare_put<P: AsyncPlatform>(
     url_path: &[u8],
 ) {
     if !config.upload() {
-        slot.prepare_error(Status::MethodNotAllowed, false);
+        slot.prepare_error_allow(Status::MethodNotAllowed, false, ALLOW_READ);
         return;
     }
     let url_len = url_path.len();
@@ -765,7 +802,7 @@ fn prepare_post<P: AsyncPlatform>(
     content_type: &[u8],
 ) {
     if !config.upload() {
-        slot.prepare_error(Status::MethodNotAllowed, false);
+        slot.prepare_error_allow(Status::MethodNotAllowed, false, ALLOW_READ);
         return;
     }
     let Some(total) = content_length else {
@@ -1069,6 +1106,7 @@ fn serve_listing<P: AsyncPlatform>(
     slot: &mut Slot<P>,
     url_path: &[u8],
     rel_path: &[u8],
+    upload: bool,
     head_only: bool,
 ) {
     let mut dir = match platform.open_dir(rel_path) {
@@ -1087,7 +1125,7 @@ fn serve_listing<P: AsyncPlatform>(
         }
     };
     let mut html = FixedBuf::<LISTING_BUF>::new();
-    if !listing::render(platform, &mut dir, url_path, false, &mut html) {
+    if !listing::render(platform, &mut dir, url_path, upload, &mut html) {
         slot.prepare_error(Status::InternalServerError, head_only);
         return;
     }

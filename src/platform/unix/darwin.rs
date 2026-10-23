@@ -305,7 +305,16 @@ pub fn send(fd: i32, buf: &[u8]) -> Result<usize> {
 
 pub fn sendfile(out_fd: i32, in_fd: i32, offset: u64, count: usize) -> Result<usize> {
     let mut length = count as i64;
-    cvt(unsafe { c_sendfile(in_fd, out_fd, offset as i64, &mut length, null_mut(), 0) })?;
+    let result = unsafe { c_sendfile(in_fd, out_fd, offset as i64, &mut length, null_mut(), 0) };
+    if result < 0 {
+        // Darwin may send a partial amount and then return EAGAIN. That
+        // progress must be reported, or the caller retries the same offset and
+        // duplicates bytes.
+        if length > 0 && (length as usize) < count {
+            return Ok(length as usize);
+        }
+        return Err(last_error());
+    }
     if length < 0 {
         Err(Error::InvalidInput)
     } else {

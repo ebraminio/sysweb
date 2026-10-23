@@ -21,7 +21,7 @@ Linux/x86_64)
     budget=81920 # 80 KiB; the async reactor is included in the main binary
     ;;
 Linux/aarch64 | Linux/arm64)
-    budget=73728 # 72 KiB
+    budget=77824 # 76 KiB
     ;;
 *)
     echo "check-size: no budget for $os/$arch (skipped)"

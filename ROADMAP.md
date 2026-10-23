@@ -124,7 +124,8 @@ Make the blocking server pleasant and safe enough to run on a LAN.
 ## M2 — Async reactor abstraction 🚧
 
 The core goal: non-blocking I/O through each OS's native readiness API, with no
-executor and no allocation.
+executor and no allocation. The readiness path is default on Unix; io_uring
+replacement and Windows IOCP remain.
 
 ### Abstraction
 

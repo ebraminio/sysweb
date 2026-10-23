@@ -21,7 +21,8 @@ pub const USAGE: &str = concat!(
      \x20       --backlog <N>      Listen backlog (default: 128)\n\
      \x20       --upload           Enable PUT uploads and folder creation\n\
      \x20       --replace          Allow uploads to replace existing files\n\
-     \x20       --async            Use the experimental async GET/HEAD path\n\
+     \x20       --async            Use the async reactor path (default)\n\
+     \x20       --blocking         Use the old blocking server path\n\
      \x20       --no-index         Disable generated directory indexes\n\
      \x20   -q, --quiet            Suppress startup and request logs\n\
      \x20   -h, --help             Print this help\n\
@@ -90,7 +91,7 @@ impl Config {
         let mut replace = false;
         let mut index = true;
         let mut port_explicit = false;
-        let mut async_mode = false;
+        let mut async_mode = true;
 
         let mut i = 1usize; // skip argv[0]
         while i < args.len() {
@@ -119,6 +120,11 @@ impl Config {
             }
             if arg == b"--async" {
                 async_mode = true;
+                i += 1;
+                continue;
+            }
+            if arg == b"--blocking" {
+                async_mode = false;
                 i += 1;
                 continue;
             }
@@ -353,7 +359,7 @@ mod tests {
         assert!(!config.replace());
         assert!(config.index());
         assert!(!config.port_explicit());
-        assert!(!config.async_mode());
+        assert!(config.async_mode());
     }
 
     #[test]

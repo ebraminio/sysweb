@@ -805,3 +805,12 @@ fn async_get_and_liveness() {
     }
     assert!(!server.root.join("partial-upload.bin").exists());
 }
+
+#[test]
+fn blocking_fallback_still_works() {
+    let server = start_server(&["--blocking"]);
+    let response = get(server.port, "/hello%20world.txt");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"hello, space");
+}
