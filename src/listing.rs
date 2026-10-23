@@ -69,6 +69,23 @@ details { margin-top: 1rem; padding: 0 1.2rem; }
 summary { cursor: pointer; }
 pre { background: #ffffff; border: 1px solid #d9dde4; border-radius: .45rem; padding: .7rem .8rem; overflow-x: auto; }
 .crumb, .sep, #status, .note, th, td.size, td.type, td.modified, tr.empty td, footer, summary, h1 .path, td.name .symlink { color: #5f6672; }
+#text-dialog {
+  position: fixed; inset: 0; z-index: 20; display: none;
+  background: rgba(23, 25, 29, .48); padding: 1rem;
+}
+.dialog-panel {
+  max-width: 38rem; margin: 2rem auto; background: #ffffff;
+  border: 1px solid #d9dde4; border-radius: .55rem; padding: 1rem;
+}
+.dialog-panel h2 { font-size: 1rem; margin: 0 0 .7rem; }
+.dialog-panel label { display: block; margin: 0 0 .6rem; color: #5f6672; }
+#text-name { width: 100%; }
+#text-body {
+  width: 100%; min-height: 10rem; resize: vertical; font: inherit;
+  border: 1px solid #d9dde4; border-radius: .45rem; padding: .55rem .65rem;
+  background: #ffffff; color: #17191d;
+}
+.dialog-actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .8rem; }
 @media (max-width: 760px) {
   th:nth-child(2), td:nth-child(2), th:nth-child(4), td:nth-child(4) { display: none; }
   th, td { padding: .45rem .5rem; }
@@ -83,6 +100,10 @@ pre { background: #ffffff; border: 1px solid #d9dde4; border-radius: .45rem; pad
   .btn, table, pre { background: #171a20; }
   .btn:hover, tbody tr:hover, #drop.over { background: #1d232d; }
   .btn:hover, .btn.primary, #drop.over { border-color: #7bb8ff; }
+  #text-dialog { background: rgba(0, 0, 0, .62); }
+  .dialog-panel { background: #171a20; border-color: #272c35; }
+  .dialog-panel label { color: #9aa3b2; }
+  #text-name, #text-body { background: #101216; border-color: #272c35; color: #e7eaf0; }
 }
 "###;
 
@@ -335,13 +356,11 @@ const JS: &[u8] = br###"
     return false;
   }
 
-  function putText(text) {
-    var fallback = 'pasted-' + new Date().getTime() + '.txt';
-    var name = prompt('Name for pasted text', fallback);
-    if (!name) return;
+  function putTextAt(text, name) {
+    name = name || '';
     var slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
     if (slash >= 0) name = name.substring(slash + 1);
-    if (!name) return;
+    if (!name) name = 'pasted-' + new Date().getTime() + '.txt';
     var xhr = createXhr();
     if (!xhr) { setStatus('XMLHttpRequest is not available'); return; }
     setStatus('Uploading ' + name);
@@ -360,6 +379,26 @@ const JS: &[u8] = br###"
     } catch (e) { setStatus(name + ': cannot send text'); }
   }
 
+  function showTextDialog(text) {
+    var dialog = byId('text-dialog');
+    var body = byId('text-body');
+    var name = byId('text-name');
+    if (!dialog || !body) {
+      var entered = prompt('Paste or type text:', text || '');
+      if (entered !== null) putTextAt(entered, '');
+      return;
+    }
+    body.value = text || '';
+    if (name) name.value = 'pasted-' + new Date().getTime() + '.txt';
+    dialog.style.display = 'block';
+    try { body.focus(); } catch (e) {}
+  }
+
+  function hideTextDialog() {
+    var dialog = byId('text-dialog');
+    if (dialog) dialog.style.display = 'none';
+  }
+
   function handleTransfer(data, allowText, preferFiles) {
     if (!data) return false;
     if (preferFiles && data.files && data.files.length) {
@@ -370,7 +409,7 @@ const JS: &[u8] = br###"
     if (allowText && data.getData) {
       var text = data.getData('text/plain');
       if (!text && data.getData('Text')) text = data.getData('Text');
-      if (text) { putText(text); return true; }
+      if (text) { showTextDialog(text); return true; }
     }
     return false;
   }
@@ -392,6 +431,18 @@ const JS: &[u8] = br###"
           addEvent(folder, 'change', function () { uploadTree(folder.files); });
         }
       }
+
+      addEvent(byId('paste-text'), 'click', function () { showTextDialog(''); });
+      addEvent(byId('text-cancel'), 'click', hideTextDialog);
+      addEvent(byId('text-upload'), 'click', function () {
+        var body = byId('text-body');
+        var name = byId('text-name');
+        if (!body || !body.value) { setStatus('No text to upload'); return; }
+        putTextAt(body.value, name ? name.value : '');
+      });
+      addEvent(byId('text-dialog'), 'click', function (event) {
+        if (event.target === event.currentTarget) hideTextDialog();
+      });
 
       var mkdir = byId('mkdir');
       if (mkdir) addEvent(mkdir, 'click', function () {
@@ -553,6 +604,9 @@ pub fn render<P: Platform>(
             || !out.push(
                 b"<button id=\"mkdir\" class=\"btn\" type=\"button\">New folder</button>",
             )
+            || !out.push(
+                b"<button id=\"paste-text\" class=\"btn\" type=\"button\">Paste text</button>",
+            )
             || !out.push(b"<span id=\"status\" role=\"status\" aria-live=\"polite\"></span>")
             || !out.push(b"</div>\n<div id=\"drop\" class=\"js-only\">Drop files or folders here, or paste files/images/text</div>\n")
         {
@@ -618,7 +672,13 @@ pub fn render<P: Platform>(
         || !out.push(b"</footer>\n<div id=\"transfer-wrap\"><details id=\"transfer\"><summary>Terminal transfer</summary><pre>")
         || !out.push(b"# upload (when --upload is enabled)\ncurl -T FILE URL\n\n")
         || !out.push(b"# Windows PowerShell (multipart POST; needs --upload)\n$f = \"C:\\filename.bin\"\n$w = New-Object System.Net.WebClient\n$w.UploadFile(\"URL\", $f)\n\n")
-        || !out.push(b"# download\ncurl -O URL</pre></details></div>\n<script>")
+        || !out.push(b"# download\ncurl -O URL</pre></details></div>\n")
+        || !out.push(b"<div id=\"text-dialog\" class=\"js-only\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"text-dialog-title\">")
+        || !out.push(b"<div class=\"dialog-panel\"><h2 id=\"text-dialog-title\">Paste text</h2>")
+        || !out.push(b"<label>File name <input id=\"text-name\" type=\"text\" value=\"pasted.txt\"></label>")
+        || !out.push(b"<textarea id=\"text-body\" rows=\"10\" placeholder=\"Paste or type text\"></textarea>")
+        || !out.push(b"<div class=\"dialog-actions\"><button id=\"text-upload\" class=\"btn primary\" type=\"button\">Upload</button>")
+        || !out.push(b"<button id=\"text-cancel\" class=\"btn\" type=\"button\">Cancel</button></div></div></div>\n<script>")
         || !out.push(JS)
         || !out.push(b"</script>\n</body>\n</html>\n")
     {

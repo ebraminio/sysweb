@@ -262,7 +262,8 @@ only when you mean it; this server has no TLS, authentication, or rate limiting.
   sortable columns, and a parent link;
 - a self-contained browser UI with file/folder upload (`webkitdirectory`,
   preserving relative paths), recursive drag-and-drop of files or folders,
-  clipboard files (including images) and text paste, progress, and folder creation, inlined into a
+  clipboard files (including images) and text paste, a paste-text dialog
+  with an editable filename, progress, and folder creation, inlined into a
   fixed 64 KiB buffer;
 - raw-body `PUT` uploads with `Content-Length`, `Expect: 100-continue`, no
   per-request size cap, exact streaming (no heap), and cleanup of failed
@@ -464,7 +465,8 @@ This is a milestone, not a hardened internet-facing server:
   `webkitdirectory`/`webkitRelativePath` or `webkitGetAsEntry`; empty
   directories are not reported by the browser. Clipboard folder paste depends
   on whether the browser exposes directory entries; regular file and text
-  paste is supported. Text paste prompts for a filename;
+  paste is supported. Text paste opens a filename/text dialog and also works
+  from the **Paste text** button on phones;
 - no delete, rename, multi-range responses, `If-Range`, `ETag`,
   `Last-Modified`, or `Date` yet;
 - no CORS, cross-origin isolation, prefix, or inactivity timeout yet;

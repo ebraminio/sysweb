@@ -628,6 +628,9 @@ fn multipart_forms_work_for_old_browsers() {
     assert!(page.contains("webkitdirectory"));
     assert!(page.contains("webkitRelativePath"));
     assert!(page.contains("clipboardData"));
+    assert!(page.contains("id=\"paste-text\""));
+    assert!(page.contains("id=\"text-dialog\""));
+    assert!(page.contains("id=\"text-body\""));
     assert!(page.contains("webkitGetAsEntry"));
     assert!(page.contains("name.split('.')[0] === 'image'"));
     assert!(page.contains("Drop files or folders here, or paste files/images/text"));
