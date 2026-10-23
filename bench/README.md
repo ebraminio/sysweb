@@ -70,6 +70,13 @@ These are single representative runs; loopback results vary between runs.
 - These are loopback/page-cache numbers. Real disks, TLS, and many concurrent
   clients would change them.
 
+## Raspberry Pi idle and 2 GiB download
+
+See [pi/README.md](pi/README.md). Short version: idle CPU is below the
+0.033%-of-one-core sampling resolution for all three servers. During a 2 GiB
+LAN download, sysweb used 0.58 CPU-seconds (1.19% of one core), nginx 0.15 s,
+and Caddy 3.14 s; throughput was network-bound.
+
 ## What to prioritize
 
 1. **Repeatable load scenarios** with slow clients and concurrent
