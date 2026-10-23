@@ -339,7 +339,7 @@ Supported release targets:
 | `macos-arm64` | `macos-latest` | Mach-O, allowlisted libSystem ABI imports |
 | `windows-x86_64` | `windows-latest` | CRT-free PE, MSVC |
 
-Intel macOS is not released yet. Downloads are raw binaries, not archives.
+Downloads are raw binaries, not archives.
 Each per-commit release is marked latest, so `/releases/latest` points at the
 newest build.
 
@@ -422,7 +422,6 @@ This is a milestone, not a hardened internet-facing server:
   symlink (it is opened once at startup);
 - no TLS, authentication, compression, or directory deletion;
 - an `accept` error other than `EINTR` terminates the process;
-- macOS support is Apple Silicon only.
 
 See [SECURITY.md](SECURITY.md) before enabling writes or exposing the server.
 

@@ -63,7 +63,7 @@ The current release (milestone 0.5).
       with no dynamic section.
 
 **Known gaps:** no `Date`, no multi-range/`If-Range`, no auth/delete/rename,
-classic forms accept one file, macOS Intel unsupported.
+classic forms accept one file.
 Minimums are Linux 5.6+, macOS 11+, and Windows 10 1809+; there are no legacy
 fallbacks.
 

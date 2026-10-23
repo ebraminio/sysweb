@@ -290,7 +290,7 @@ allocator.
 
 `AT_FDCWD` is `-2`, `sockaddr_in` begins with a length byte, `SOL_SOCKET` is
 `0xffff`, and `SO_REUSEADDR` is `4`. `O_NOFOLLOW_ANY` is available from macOS
-11. Intel macOS is not implemented yet.
+11.
 
 ## HTTP pipeline
 
