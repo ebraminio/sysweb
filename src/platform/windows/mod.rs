@@ -382,6 +382,18 @@ impl Sys {
         })
     }
 
+    fn reject_reparse(handle: *mut c_void) -> Result<()> {
+        let mut info = ByHandleFileInformation::default();
+        if unsafe { GetFileInformationByHandle(handle, &mut info) } == 0 {
+            return Err(Sys::last_error());
+        }
+        if info.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            Err(Error::PermissionDenied)
+        } else {
+            Ok(())
+        }
+    }
+
     fn configure(&mut self) -> Result<()> {
         if self.wsa {
             return Ok(());
@@ -559,6 +571,10 @@ impl Platform for Sys {
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
         )?;
+        if let Err(error) = Self::reject_reparse(handle) {
+            unsafe { CloseHandle(handle) };
+            return Err(error);
+        }
         let _info = Self::info_for(handle)?;
         Ok(File::new(handle))
     }
@@ -620,6 +636,16 @@ impl Platform for Sys {
     }
 
     fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir> {
+        let check = self.open_handle(
+            path,
+            GENERIC_READ,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        )?;
+        let reparse = Self::reject_reparse(check);
+        unsafe { CloseHandle(check) };
+        reparse?;
+
         let mut full = [0u16; MAX_WPATH];
         let len = self.root_path(path, &mut full)?;
         if len + 2 >= full.len() {

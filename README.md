@@ -400,8 +400,8 @@ This is a milestone, not a hardened internet-facing server:
   There are no CSS custom properties. Layout is basic in engines without
   flexbox. JS uploads still need `File`/XHR, otherwise the classic form is the
   fallback;
-- the Windows backend uses `WSAPoll`, not IOCP yet; its symlink/path hardening
-  is still under review, so do not expose an untrusted tree with it yet;
+- the Windows backend uses `WSAPoll`, not IOCP yet. Reparse points are rejected
+  on open, but broader Windows path-hardening review is still ongoing;
 - folder upload preserves relative paths but relies on the browser's
   `webkitdirectory`/`webkitRelativePath`; empty directories are not reported by
   the browser, and dropping a folder is not supported (drop files instead);
