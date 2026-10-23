@@ -18,7 +18,7 @@ Darwin/arm64)
     budget=114688 # 112 KiB
     ;;
 Linux/x86_64)
-    budget=73728 # 72 KiB; the async reactor is included in the main binary
+    budget=81920 # 80 KiB; the async reactor is included in the main binary
     ;;
 Linux/aarch64 | Linux/arm64)
     budget=73728 # 72 KiB

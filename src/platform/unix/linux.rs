@@ -449,7 +449,8 @@ pub fn set_nonblocking(fd: i32) -> Result<()> {
     decode(result).map(|_| ())
 }
 
-#[repr(C, packed)]
+#[cfg_attr(target_arch = "x86_64", repr(C, packed))]
+#[cfg_attr(target_arch = "aarch64", repr(C))]
 #[derive(Clone, Copy)]
 struct EpollEvent {
     events: u32,

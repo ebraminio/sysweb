@@ -150,8 +150,8 @@ executor and no allocation.
 ### Server state machine
 
 - [x] Fixed `Connection` slots for the GET/HEAD async path (no heap).
-- [x] States for `ReadingHeaders → WritingHeaders → Streaming`, plus listing
-      and closing; `ReadingBody → WritingFile` for uploads remains.
+- [x] States for `ReadingHeaders → WritingHeaders → Streaming`,
+      `ReadingBody → WritingFile`, listing, and closing.
 - [ ] Per-slot deadlines for header read, idle keep-alive, and write progress.
 - [ ] Bounded accept loop per event to avoid starving existing connections.
 - [ ] Replace the blocking accept backoff with a reactor timer/deadline and

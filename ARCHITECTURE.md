@@ -479,9 +479,9 @@ reviewable.
 
 The first async slice is implemented: `--async` uses an epoll (Linux) or
 kqueue (macOS) readiness reactor, non-blocking accept/read/write/sendfile, and
-a fixed-slot GET/HEAD state machine. Metadata and listings remain synchronous;
-uploads still use the blocking path. This is not the final io_uring backend, but
-it establishes the state-machine and liveness properties.
+a fixed-slot GET/HEAD/PUT/POST state machine. Metadata and listings remain
+synchronous. This is not the final io_uring backend, but it establishes the
+state-machine and liveness properties.
 
 The blocking `Platform` trait is deliberately shaped so the async version is an
 extension, not a rewrite. The async backend will not use Rust `async`/`await`:

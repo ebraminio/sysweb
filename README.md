@@ -186,6 +186,7 @@ OPTIONS:
         --upload           Enable PUT uploads and folder creation
         --replace          Allow uploads to replace existing files
         --no-index         Disable generated directory indexes
+        --async            Use the experimental async GET/HEAD/PUT/POST path
     -q, --quiet            Suppress startup and request logs
     -h, --help             Print help
     -V, --version          Print the version
@@ -273,9 +274,9 @@ Current stripped sizes from this workspace:
 
 | Target | Size | Budget |
 | --- | ---: | ---: |
-| macOS arm64 | 100,784 B | 112 KiB |
-| Linux x86_64 | 68,168 B | 72 KiB |
-| Linux aarch64 | 67,136 B | 72 KiB |
+| macOS arm64 | 100,992 B | 112 KiB |
+| Linux x86_64 | 75,016 B | 80 KiB |
+| Linux aarch64 | 73,088 B | 72 KiB |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
 workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and
@@ -384,8 +385,8 @@ This is a milestone, not a hardened internet-facing server:
   current suites target crashes, resets, containment, and liveness, not
   throughput or latency under concurrency;
 - `Connection: close` only; no keep-alive or pipelining;
-- `--async` is experimental and currently serves only GET/HEAD; uploads still
-  use the blocking path;
+- `--async` is experimental; GET/HEAD and PUT/POST use the non-blocking
+  socket path, while metadata and listing work remain synchronous;
 - uploads are off by default and have no auth, quota, or per-request size cap;
   disk exhaustion is the operator's responsibility;
 - classic form posts upload one file per request; `filename*` (RFC 5987) and

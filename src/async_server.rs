@@ -10,6 +10,7 @@ use crate::fixedbuf::FixedBuf;
 use crate::http::{self, Method, Status};
 use crate::listing::{self, LISTING_BUF};
 use crate::mime;
+use crate::multipart::{self, Sink, SinkError};
 use crate::path::{self, MAX_PATH, MAX_URL_PATH};
 use crate::platform::{AsyncPlatform, Error, Event, Interest};
 use crate::server::{build_header, resolve_range, root_relative, HEADER_BUF, REQUEST_BUF};
@@ -17,6 +18,10 @@ use crate::server::{build_header, resolve_range, root_relative, HEADER_BUF, REQU
 const MAX_CONNECTIONS: usize = 8;
 const RESPONSE_BUF: usize = LISTING_BUF + HEADER_BUF;
 const EVENT_BATCH: usize = 64;
+const BODY_BUF: usize = 16 * 1024;
+const CONTINUE: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
+const UPLOADED: &[u8] = b"UPLOADED\n";
+const CREATED: &[u8] = b"CREATED\n";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
@@ -24,6 +29,109 @@ enum State {
     Reading,
     Writing,
     SendingFile,
+    SendingContinue,
+    ReadingBody,
+}
+
+#[allow(clippy::large_enum_variant)]
+enum Upload<P: AsyncPlatform> {
+    Put(PutUpload<P>),
+    Post(PostUpload<P>),
+    Discard { remaining: u64 },
+}
+
+struct PutUpload<P: AsyncPlatform> {
+    file: P::File,
+    path: [u8; MAX_PATH],
+    path_len: usize,
+    remaining: u64,
+}
+
+struct PostUpload<P: AsyncPlatform> {
+    parser: multipart::Parser,
+    target: [u8; MAX_PATH],
+    target_len: usize,
+    target_is_dir: bool,
+    replace: bool,
+    file: Option<P::File>,
+    path: [u8; MAX_PATH],
+    path_len: usize,
+    files: usize,
+    remaining: u64,
+}
+
+struct PostSink<'a, P: AsyncPlatform> {
+    platform: &'a mut P,
+    target: &'a [u8],
+    target_is_dir: bool,
+    replace: bool,
+    file: &'a mut Option<P::File>,
+    path: &'a mut [u8; MAX_PATH],
+    path_len: &'a mut usize,
+    files: &'a mut usize,
+}
+
+impl<P: AsyncPlatform> Sink for PostSink<'_, P> {
+    fn begin_file(&mut self, filename: &[u8]) -> core::result::Result<(), SinkError> {
+        if *self.files > 0 {
+            return Err(SinkError::TooManyFiles);
+        }
+        let mut len;
+        if self.target_is_dir {
+            if self.target == b"." {
+                if filename.len() + 1 >= MAX_PATH {
+                    return Err(SinkError::Io);
+                }
+                self.path[..filename.len()].copy_from_slice(filename);
+                len = filename.len();
+            } else {
+                if self.target.len() + filename.len() + 2 >= MAX_PATH {
+                    return Err(SinkError::Io);
+                }
+                self.path[..self.target.len()].copy_from_slice(self.target);
+                len = self.target.len();
+                if self.path[len - 1] != b'/' {
+                    self.path[len] = b'/';
+                    len += 1;
+                }
+                self.path[len..len + filename.len()].copy_from_slice(filename);
+                len += filename.len();
+            }
+        } else {
+            if self.target.len() + filename.len() + 1 >= MAX_PATH {
+                return Err(SinkError::Io);
+            }
+            self.path[..self.target.len()].copy_from_slice(self.target);
+            len = self.target.len();
+        }
+        let file = self
+            .platform
+            .create_file(&self.path[..len], self.replace)
+            .map_err(|error| match error {
+                Error::AlreadyExists | Error::IsADirectory => SinkError::Conflict,
+                Error::PermissionDenied => SinkError::Forbidden,
+                Error::NotFound => SinkError::NotFound,
+                _ => SinkError::Io,
+            })?;
+        *self.path_len = len;
+        *self.file = Some(file);
+        Ok(())
+    }
+
+    fn write(&mut self, data: &[u8]) -> core::result::Result<(), SinkError> {
+        let file = self.file.as_mut().ok_or(SinkError::Io)?;
+        self.platform
+            .write_file(file, data)
+            .map_err(|_| SinkError::Io)
+    }
+
+    fn end_file(&mut self) -> core::result::Result<(), SinkError> {
+        if self.file.take().is_none() {
+            return Err(SinkError::Io);
+        }
+        *self.files += 1;
+        Ok(())
+    }
 }
 
 struct Slot<P: AsyncPlatform> {
@@ -37,6 +145,9 @@ struct Slot<P: AsyncPlatform> {
     response_pos: usize,
     file_offset: u64,
     file_remaining: u64,
+    upload: Option<Upload<P>>,
+    body: [u8; BODY_BUF],
+    continue_pos: usize,
     head_only: bool,
     status: Status,
     log_path: [u8; MAX_URL_PATH],
@@ -57,6 +168,9 @@ impl<P: AsyncPlatform> Slot<P> {
             response_pos: 0,
             file_offset: 0,
             file_remaining: 0,
+            upload: None,
+            body: [0; BODY_BUF],
+            continue_pos: 0,
             head_only: false,
             status: Status::Ok,
             log_path: [0; MAX_URL_PATH],
@@ -74,6 +188,8 @@ impl<P: AsyncPlatform> Slot<P> {
         self.response_pos = 0;
         self.file_offset = 0;
         self.file_remaining = 0;
+        self.upload = None;
+        self.continue_pos = 0;
         self.head_only = false;
         self.status = Status::Ok;
         self.log_path_len = 0;
@@ -277,6 +393,10 @@ fn handle_event<P: AsyncPlatform>(
         State::Reading => read_slot(platform, poller, config, &mut slots[index], index + 1),
         State::Writing => write_slot(platform, poller, &mut slots[index], index + 1),
         State::SendingFile => send_file_slot(platform, poller, &mut slots[index], index + 1),
+        State::SendingContinue => {
+            write_continue_slot(platform, poller, &mut slots[index], index + 1)
+        }
+        State::ReadingBody => read_body_slot(platform, poller, &mut slots[index], index + 1),
         State::Idle => {}
     }
 }
@@ -342,13 +462,19 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
     let method = request.method;
     let range = request.range;
     let head_only = method == Method::Head;
-    if method != Method::Get && method != Method::Head {
-        // Uploads are still handled by the blocking path; this experimental
-        // server refuses them rather than silently dropping a body.
-        slot.prepare_error(Status::MethodNotAllowed, false);
-        return;
+    let content_length = request.content_length;
+    let expect_continue = request.expect_continue;
+    let body_offset = request.body_offset;
+    let mut content_type = [0u8; 256];
+    let mut content_type_len = 0usize;
+    if let Some(value) = request.content_type {
+        if value.len() > content_type.len() {
+            slot.prepare_error(Status::UnsupportedMediaType, false);
+            return;
+        }
+        content_type[..value.len()].copy_from_slice(value);
+        content_type_len = value.len();
     }
-
     let mut url_path = [0u8; MAX_URL_PATH];
     let url_len = match path::normalize(request.target, &mut url_path) {
         Ok(len) => len,
@@ -367,6 +493,38 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
     }
     slot.log_path[..url_len].copy_from_slice(&url_path[..url_len]);
     slot.log_path_len = url_len;
+
+    if method == Method::Put {
+        prepare_put(
+            platform,
+            config,
+            slot,
+            content_length,
+            expect_continue,
+            body_offset,
+            slot.request_len,
+            &url_path[..url_len],
+        );
+        return;
+    }
+    if method == Method::Post {
+        prepare_post(
+            platform,
+            config,
+            slot,
+            content_length,
+            expect_continue,
+            body_offset,
+            slot.request_len,
+            &url_path[..url_len],
+            &content_type[..content_type_len],
+        );
+        return;
+    }
+    if method != Method::Get && method != Method::Head {
+        slot.prepare_error(Status::MethodNotAllowed, false);
+        return;
+    }
 
     let rel_path = root_relative(&url_path[..url_len]);
     let file = match platform.open(rel_path) {
@@ -465,6 +623,444 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
         }
         Err(Error::PermissionDenied) => slot.prepare_error(Status::Forbidden, head_only),
         Err(_) => slot.prepare_error(Status::InternalServerError, head_only),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_put<P: AsyncPlatform>(
+    platform: &mut P,
+    config: &Config,
+    slot: &mut Slot<P>,
+    content_length: Option<u64>,
+    expect_continue: bool,
+    body_offset: usize,
+    request_len: usize,
+    url_path: &[u8],
+) {
+    if !config.upload() {
+        slot.prepare_error(Status::MethodNotAllowed, false);
+        return;
+    }
+    let url_len = url_path.len();
+    if url_len == 1 {
+        slot.prepare_error(Status::BadRequest, false);
+        return;
+    }
+    let rel_path = root_relative(url_path);
+
+    if url_path.ends_with(b"/") {
+        let total = content_length.unwrap_or(0);
+        match platform.create_dir(rel_path) {
+            Ok(()) => {
+                if total == 0 {
+                    let _ = slot.prepare_response(
+                        Status::Created,
+                        CREATED.len() as u64,
+                        b"text/plain; charset=utf-8",
+                        CREATED,
+                        false,
+                        None,
+                        None,
+                        false,
+                    );
+                    slot.log_len = CREATED.len() as u64;
+                } else {
+                    slot.upload = Some(Upload::Discard { remaining: total });
+                    slot.state = State::ReadingBody;
+                }
+            }
+            Err(Error::AlreadyExists) => slot.prepare_error(Status::Conflict, false),
+            Err(Error::NotFound) => slot.prepare_error(Status::NotFound, false),
+            Err(Error::PermissionDenied) => slot.prepare_error(Status::Forbidden, false),
+            Err(_) => slot.prepare_error(Status::InternalServerError, false),
+        }
+        return;
+    }
+
+    let Some(total) = content_length else {
+        slot.prepare_error(Status::LengthRequired, false);
+        return;
+    };
+    let mut file = match platform.create_file(rel_path, config.replace()) {
+        Ok(file) => file,
+        Err(Error::AlreadyExists) | Err(Error::IsADirectory) => {
+            slot.prepare_error(Status::Conflict, false);
+            return;
+        }
+        Err(Error::NotFound) => {
+            slot.prepare_error(Status::NotFound, false);
+            return;
+        }
+        Err(Error::PermissionDenied) => {
+            slot.prepare_error(Status::Forbidden, false);
+            return;
+        }
+        Err(_) => {
+            slot.prepare_error(Status::InternalServerError, false);
+            return;
+        }
+    };
+
+    let mut remaining = total;
+    let buffered = &slot.request[body_offset..request_len];
+    let take = core::cmp::min(buffered.len() as u64, remaining) as usize;
+    if take > 0 {
+        if platform.write_file(&mut file, &buffered[..take]).is_err() {
+            drop(file);
+            let _ = platform.remove_file(rel_path);
+            slot.prepare_error(Status::InternalServerError, false);
+            return;
+        }
+        remaining -= take as u64;
+    }
+
+    let expect_continue = expect_continue && take == 0 && remaining > 0;
+    if remaining == 0 {
+        drop(file);
+        let _ = slot.prepare_response(
+            Status::Created,
+            UPLOADED.len() as u64,
+            b"text/plain; charset=utf-8",
+            UPLOADED,
+            false,
+            None,
+            None,
+            false,
+        );
+        slot.log_len = UPLOADED.len() as u64;
+        return;
+    }
+    let mut path = [0u8; MAX_PATH];
+    if rel_path.len() >= path.len() {
+        drop(file);
+        let _ = platform.remove_file(rel_path);
+        slot.prepare_error(Status::UriTooLong, false);
+        return;
+    }
+    path[..rel_path.len()].copy_from_slice(rel_path);
+    slot.upload = Some(Upload::Put(PutUpload {
+        file,
+        path,
+        path_len: rel_path.len(),
+        remaining,
+    }));
+    if expect_continue {
+        slot.state = State::SendingContinue;
+        slot.continue_pos = 0;
+    } else {
+        slot.state = State::ReadingBody;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_post<P: AsyncPlatform>(
+    platform: &mut P,
+    config: &Config,
+    slot: &mut Slot<P>,
+    content_length: Option<u64>,
+    expect_continue: bool,
+    body_offset: usize,
+    request_len: usize,
+    url_path: &[u8],
+    content_type: &[u8],
+) {
+    if !config.upload() {
+        slot.prepare_error(Status::MethodNotAllowed, false);
+        return;
+    }
+    let Some(total) = content_length else {
+        slot.prepare_error(Status::LengthRequired, false);
+        return;
+    };
+    if content_type.is_empty() {
+        slot.prepare_error(Status::UnsupportedMediaType, false);
+        return;
+    }
+    let parser = match multipart::Parser::new(content_type) {
+        Ok(parser) => parser,
+        Err(multipart::ParseError::UnsupportedContentType) => {
+            slot.prepare_error(Status::UnsupportedMediaType, false);
+            return;
+        }
+        Err(_) => {
+            slot.prepare_error(Status::BadRequest, false);
+            return;
+        }
+    };
+    let rel_path = root_relative(url_path);
+
+    let mut post = PostUpload {
+        parser,
+        target: [0; MAX_PATH],
+        target_len: rel_path.len(),
+        target_is_dir: url_path.ends_with(b"/"),
+        replace: config.replace(),
+        file: None,
+        path: [0; MAX_PATH],
+        path_len: 0,
+        files: 0,
+        remaining: total,
+    };
+    if rel_path.len() > post.target.len() {
+        slot.prepare_error(Status::UriTooLong, false);
+        return;
+    }
+    post.target[..rel_path.len()].copy_from_slice(rel_path);
+
+    let buffered = &slot.request[body_offset..request_len];
+    let take = core::cmp::min(buffered.len() as u64, post.remaining) as usize;
+    if take > 0 {
+        if let Err(error) = feed_post(platform, &mut post, &buffered[..take]) {
+            abort_post(platform, &mut post);
+            slot.prepare_error(multipart_status(error), false);
+            return;
+        }
+        post.remaining -= take as u64;
+    }
+
+    let expect_continue = expect_continue && take == 0 && post.remaining > 0;
+    if post.remaining == 0 {
+        if let Err(error) = finish_post(platform, &mut post) {
+            abort_post(platform, &mut post);
+            slot.prepare_error(multipart_status(error), false);
+            return;
+        }
+        let _ = slot.prepare_response(
+            Status::Created,
+            UPLOADED.len() as u64,
+            b"text/plain; charset=utf-8",
+            UPLOADED,
+            false,
+            None,
+            None,
+            false,
+        );
+        slot.log_len = UPLOADED.len() as u64;
+        return;
+    }
+
+    slot.upload = Some(Upload::Post(post));
+    if expect_continue {
+        slot.state = State::SendingContinue;
+        slot.continue_pos = 0;
+    } else {
+        slot.state = State::ReadingBody;
+    }
+}
+
+fn feed_post<P: AsyncPlatform>(
+    platform: &mut P,
+    post: &mut PostUpload<P>,
+    data: &[u8],
+) -> core::result::Result<(), multipart::ParseError> {
+    let mut sink = PostSink {
+        platform,
+        target: &post.target[..post.target_len],
+        target_is_dir: post.target_is_dir,
+        replace: post.replace,
+        file: &mut post.file,
+        path: &mut post.path,
+        path_len: &mut post.path_len,
+        files: &mut post.files,
+    };
+    post.parser.feed(data, &mut sink)
+}
+
+fn finish_post<P: AsyncPlatform>(
+    platform: &mut P,
+    post: &mut PostUpload<P>,
+) -> core::result::Result<(), multipart::ParseError> {
+    let mut sink = PostSink {
+        platform,
+        target: &post.target[..post.target_len],
+        target_is_dir: post.target_is_dir,
+        replace: post.replace,
+        file: &mut post.file,
+        path: &mut post.path,
+        path_len: &mut post.path_len,
+        files: &mut post.files,
+    };
+    post.parser.finish(&mut sink)
+}
+
+fn abort_post<P: AsyncPlatform>(platform: &mut P, post: &mut PostUpload<P>) {
+    post.file = None;
+    if post.path_len > 0 {
+        let _ = platform.remove_file(&post.path[..post.path_len]);
+        post.path_len = 0;
+    }
+}
+
+fn multipart_status(error: multipart::ParseError) -> Status {
+    match error {
+        multipart::ParseError::UnsupportedContentType => Status::UnsupportedMediaType,
+        multipart::ParseError::NoFile | multipart::ParseError::Malformed => Status::BadRequest,
+        multipart::ParseError::Sink(SinkError::Conflict) => Status::Conflict,
+        multipart::ParseError::Sink(SinkError::Forbidden) => Status::Forbidden,
+        multipart::ParseError::Sink(SinkError::NotFound) => Status::NotFound,
+        multipart::ParseError::Sink(SinkError::TooManyFiles) => Status::BadRequest,
+        multipart::ParseError::Sink(SinkError::Io) => Status::InternalServerError,
+    }
+}
+
+fn finish_upload<P: AsyncPlatform>(platform: &mut P, slot: &mut Slot<P>) {
+    let Some(upload) = slot.upload.take() else {
+        return;
+    };
+    let (status, body) = match upload {
+        Upload::Put(upload) => {
+            drop(upload);
+            (Status::Created, UPLOADED)
+        }
+        Upload::Post(mut post) => {
+            if let Err(error) = finish_post(platform, &mut post) {
+                abort_post(platform, &mut post);
+                let status = multipart_status(error);
+                slot.prepare_error(status, false);
+                return;
+            }
+            (Status::Created, UPLOADED)
+        }
+        Upload::Discard { .. } => (Status::Created, CREATED),
+    };
+    let _ = slot.prepare_response(
+        status,
+        body.len() as u64,
+        b"text/plain; charset=utf-8",
+        body,
+        false,
+        None,
+        None,
+        false,
+    );
+    slot.log_len = body.len() as u64;
+}
+
+fn read_body_slot<P: AsyncPlatform>(
+    platform: &mut P,
+    poller: &mut P::Poller,
+    slot: &mut Slot<P>,
+    token: usize,
+) {
+    loop {
+        let remaining = match slot.upload.as_ref() {
+            Some(Upload::Put(upload)) => upload.remaining,
+            Some(Upload::Post(upload)) => upload.remaining,
+            Some(Upload::Discard { remaining }) => *remaining,
+            None => {
+                close_slot(platform, poller, slot, token);
+                return;
+            }
+        };
+        if remaining == 0 {
+            finish_upload(platform, slot);
+            transition(platform, poller, slot, token);
+            return;
+        }
+        let want = core::cmp::min(remaining, slot.body.len() as u64) as usize;
+        let stream = match slot.stream.as_mut() {
+            Some(stream) => stream,
+            None => return,
+        };
+        let read = platform.read_nonblocking(stream, &mut slot.body[..want]);
+        let count = match read {
+            Ok(0) => {
+                abort_upload(platform, slot);
+                slot.prepare_error(Status::BadRequest, false);
+                transition(platform, poller, slot, token);
+                return;
+            }
+            Ok(count) => count,
+            Err(Error::Interrupted) => continue,
+            Err(Error::WouldBlock) => return,
+            Err(_) => {
+                abort_upload(platform, slot);
+                slot.prepare_error(Status::BadRequest, false);
+                transition(platform, poller, slot, token);
+                return;
+            }
+        };
+        let error = match slot.upload.as_mut() {
+            Some(Upload::Put(upload)) => {
+                if platform
+                    .write_file(&mut upload.file, &slot.body[..count])
+                    .is_err()
+                {
+                    Some(Status::InternalServerError)
+                } else {
+                    upload.remaining -= count as u64;
+                    None
+                }
+            }
+            Some(Upload::Post(upload)) => match feed_post(platform, upload, &slot.body[..count]) {
+                Ok(()) => {
+                    upload.remaining -= count as u64;
+                    None
+                }
+                Err(error) => Some(multipart_status(error)),
+            },
+            Some(Upload::Discard { remaining }) => {
+                *remaining -= count as u64;
+                None
+            }
+            None => Some(Status::InternalServerError),
+        };
+        if let Some(status) = error {
+            abort_upload(platform, slot);
+            slot.prepare_error(status, false);
+            transition(platform, poller, slot, token);
+            return;
+        }
+    }
+}
+
+fn abort_upload<P: AsyncPlatform>(platform: &mut P, slot: &mut Slot<P>) {
+    if let Some(upload) = slot.upload.take() {
+        match upload {
+            Upload::Put(upload) => {
+                if upload.path_len > 0 {
+                    let _ = platform.remove_file(&upload.path[..upload.path_len]);
+                }
+            }
+            Upload::Post(mut post) => {
+                abort_post(platform, &mut post);
+            }
+            Upload::Discard { .. } => {}
+        }
+    }
+}
+
+fn write_continue_slot<P: AsyncPlatform>(
+    platform: &mut P,
+    poller: &mut P::Poller,
+    slot: &mut Slot<P>,
+    token: usize,
+) {
+    let stream = match slot.stream.as_mut() {
+        Some(stream) => stream,
+        None => return,
+    };
+    while slot.continue_pos < CONTINUE.len() {
+        match platform.write_nonblocking(stream, &CONTINUE[slot.continue_pos..]) {
+            Ok(0) => {
+                close_slot(platform, poller, slot, token);
+                return;
+            }
+            Ok(count) => slot.continue_pos += count,
+            Err(Error::Interrupted) => continue,
+            Err(Error::WouldBlock) => return,
+            Err(_) => {
+                close_slot(platform, poller, slot, token);
+                return;
+            }
+        }
+    }
+    slot.state = State::ReadingBody;
+    if platform
+        .set_interest(poller, stream, token, Interest::Readable)
+        .is_err()
+    {
+        close_slot(platform, poller, slot, token);
     }
 }
 
@@ -663,14 +1259,17 @@ fn transition<P: AsyncPlatform>(
     slot: &mut Slot<P>,
     token: usize,
 ) {
-    if slot.state != State::Writing {
-        return;
-    }
-    let interest = if slot.file_remaining > 0 || slot.response_pos < slot.response_len {
-        Interest::Writable
-    } else {
-        close_slot(platform, poller, slot, token);
-        return;
+    let interest = match slot.state {
+        State::SendingContinue => Interest::Writable,
+        State::ReadingBody => Interest::Readable,
+        State::Writing => {
+            if slot.file_remaining == 0 && slot.response_pos >= slot.response_len {
+                close_slot(platform, poller, slot, token);
+                return;
+            }
+            Interest::Writable
+        }
+        _ => return,
     };
     let Some(stream) = slot.stream.as_ref() else {
         return;
@@ -689,6 +1288,7 @@ fn close_slot<P: AsyncPlatform>(
     slot: &mut Slot<P>,
     token: usize,
 ) {
+    abort_upload(platform, slot);
     if let Some(stream) = slot.stream.as_ref() {
         let _ = platform.deregister_stream(poller, stream, token);
     }

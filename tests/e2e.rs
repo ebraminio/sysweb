@@ -708,7 +708,7 @@ fn replace_mode_overwrites() {
 
 #[test]
 fn async_get_and_liveness() {
-    let server = start_server(&["--async"]);
+    let server = start_server(&["--async", "--upload"]);
 
     let response = get(server.port, "/");
     let (head, body) = split(&response);
@@ -733,6 +733,43 @@ fn async_get_and_liveness() {
     let response = get(server.port, "/missing");
     assert_status(&split(&response).0, "HTTP/1.1 404 Not Found");
 
+    let payload: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
+    let response = put(server.port, "/async-put.bin", &payload);
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    assert_eq!(
+        fs::read(server.root.join("async-put.bin")).unwrap(),
+        payload
+    );
+
+    let body = multipart_body("----asyncForm", "async-post.txt", b"multipart async");
+    let response = post_multipart(server.port, "/assets/", "----asyncForm", &body);
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    assert_eq!(
+        fs::read(server.root.join("assets/async-post.txt")).unwrap(),
+        b"multipart async"
+    );
+
+    let response = request(
+        server.port,
+        b"PUT /async-dir/ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    );
+    assert_status(&split(&response).0, "HTTP/1.1 201 Created");
+    assert!(server.root.join("async-dir").is_dir());
+
+    let response = request_split(
+        server.port,
+        "PUT /async-expect.txt HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\nExpect: 100-continue\r\n\r\n",
+        b"expect body",
+    );
+    let response_text = String::from_utf8_lossy(&response);
+    assert!(response_text.starts_with("HTTP/1.1 100 Continue\r\n\r\n"));
+    assert!(response_text.contains("HTTP/1.1 201 Created"));
+    assert!(response_text.ends_with("UPLOADED\n"));
+    assert_eq!(
+        fs::read(server.root.join("async-expect.txt")).unwrap(),
+        b"expect body"
+    );
+
     let response = get(server.port, "/sub");
     let (head, _) = split(&response);
     assert_status(&head, "HTTP/1.1 301 Moved Permanently");
@@ -751,4 +788,20 @@ fn async_get_and_liveness() {
     let response = get(server.port, "/");
     assert_status(&split(&response).0, "HTTP/1.1 200 OK");
     drop(slow);
+
+    // A stalled upload also occupies only its slot, and disconnecting removes
+    // the partial file.
+    let mut slow_upload = TcpStream::connect(("127.0.0.1", server.port)).expect("upload connect");
+    slow_upload
+        .write_all(b"PUT /partial-upload.bin HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1000000\r\n\r\npartial")
+        .expect("upload headers");
+    std::thread::sleep(Duration::from_millis(100));
+    let response = get(server.port, "/");
+    assert_status(&split(&response).0, "HTTP/1.1 200 OK");
+    drop(slow_upload);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while server.root.join("partial-upload.bin").exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!server.root.join("partial-upload.bin").exists());
 }
