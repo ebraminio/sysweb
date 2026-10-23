@@ -124,7 +124,11 @@ Linux x86_64:
 curl -fsSL -o /tmp/sysweb https://github.com/ebraminio/sysweb/releases/latest/download/sysweb-linux-x86_64 && chmod +x /tmp/sysweb && /tmp/sysweb --root ./public
 ```
 
-Linux aarch64: replace `linux-x86_64` with `linux-aarch64`.
+Linux aarch64:
+
+```sh
+curl -fsSL -o /tmp/sysweb https://github.com/ebraminio/sysweb/releases/latest/download/sysweb-linux-aarch64 && chmod +x /tmp/sysweb && /tmp/sysweb --root ./public
+```
 
 macOS arm64:
 
@@ -469,7 +473,9 @@ This is a milestone, not a hardened internet-facing server:
   directories are not reported by the browser. Clipboard folder paste depends
   on whether the browser exposes directory entries; regular file and text
   paste is supported. Text paste opens a filename/text dialog and also works
-  from the **Paste text** button on phones;
+  from the **Paste text** button on phones. That button is outside the
+  File-API tools, so it also appears in the classic fallback; uploading still
+  needs an XHR/ActiveX request object;
 - no delete, rename, multi-range responses, `If-Range`, `ETag`,
   `Last-Modified`, or `Date` yet;
 - no CORS, cross-origin isolation, prefix, or inactivity timeout yet;

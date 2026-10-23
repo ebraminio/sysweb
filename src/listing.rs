@@ -432,14 +432,6 @@ const JS: &[u8] = br###"
         }
       }
 
-      addEvent(byId('paste-text'), 'click', function () { showTextDialog(''); });
-      addEvent(byId('text-cancel'), 'click', hideTextDialog);
-      addEvent(byId('text-upload'), 'click', function () {
-        var body = byId('text-body');
-        var name = byId('text-name');
-        if (!body || !body.value) { setStatus('No text to upload'); return; }
-        putTextAt(body.value, name ? name.value : '');
-      });
       addEvent(byId('text-dialog'), 'click', function (event) {
         if (event.target === event.currentTarget) hideTextDialog();
       });
@@ -541,6 +533,16 @@ const JS: &[u8] = br###"
     if (!key) return;
     addEvent(button, 'click', function () { sortBy(key); });
   });
+
+  // Inline handlers keep the text dialog usable without attachEvent.
+  window.syswebShowText = function () { showTextDialog(''); };
+  window.syswebHideText = hideTextDialog;
+  window.syswebTextUpload = function () {
+    var body = byId('text-body');
+    var name = byId('text-name');
+    if (!body || !body.value) { setStatus('No text to upload'); return; }
+    putTextAt(body.value, name ? name.value : '');
+  };
 })();
 "###;
 
@@ -594,6 +596,9 @@ pub fn render<P: Platform>(
             || !out.push(b"<label class=\"btn primary\">Upload (form)<input type=\"file\" name=\"file\"></label>")
             || !out.push(b"<button class=\"btn\" type=\"submit\">Upload</button>")
             || !out.push(b"</form>\n")
+            || !out.push(
+                b"<div class=\"tools\"><button id=\"paste-text\" class=\"btn\" type=\"button\" onclick=\"syswebShowText()\">Paste text</button></div>\n",
+            )
             || !out.push(b"<div id=\"js-tools\" class=\"tools js-only\">")
             || !out.push(
                 b"<label class=\"btn primary\">Upload<input id=\"file\" type=\"file\" multiple></label>",
@@ -603,9 +608,6 @@ pub fn render<P: Platform>(
             )
             || !out.push(
                 b"<button id=\"mkdir\" class=\"btn\" type=\"button\">New folder</button>",
-            )
-            || !out.push(
-                b"<button id=\"paste-text\" class=\"btn\" type=\"button\">Paste text</button>",
             )
             || !out.push(b"<span id=\"status\" role=\"status\" aria-live=\"polite\"></span>")
             || !out.push(b"</div>\n<div id=\"drop\" class=\"js-only\">Drop files or folders here, or paste files/images/text</div>\n")
@@ -677,8 +679,8 @@ pub fn render<P: Platform>(
         || !out.push(b"<div class=\"dialog-panel\"><h2 id=\"text-dialog-title\">Paste text</h2>")
         || !out.push(b"<label>File name <input id=\"text-name\" type=\"text\" value=\"pasted.txt\"></label>")
         || !out.push(b"<textarea id=\"text-body\" rows=\"10\" placeholder=\"Paste or type text\"></textarea>")
-        || !out.push(b"<div class=\"dialog-actions\"><button id=\"text-upload\" class=\"btn primary\" type=\"button\">Upload</button>")
-        || !out.push(b"<button id=\"text-cancel\" class=\"btn\" type=\"button\">Cancel</button></div></div></div>\n<script>")
+        || !out.push(b"<div class=\"dialog-actions\"><button id=\"text-upload\" class=\"btn primary\" type=\"button\" onclick=\"syswebTextUpload()\">Upload</button>")
+        || !out.push(b"<button id=\"text-cancel\" class=\"btn\" type=\"button\" onclick=\"syswebHideText()\">Cancel</button></div></div></div>\n<script>")
         || !out.push(JS)
         || !out.push(b"</script>\n</body>\n</html>\n")
     {
