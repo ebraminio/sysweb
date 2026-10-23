@@ -19,6 +19,7 @@ pub const USAGE: &str = concat!(
      \x20   -p, --port <PORT>      TCP port, 1-65535 (default: 8080)\n\
      \x20   -H, --host <ADDR>      IPv4 address to bind (default: 127.0.0.1)\n\
      \x20       --backlog <N>      Listen backlog (default: 128)\n\
+     \x20       --idle-timeout <S> Async idle timeout in seconds (default: 30)\n\
      \x20       --upload           Enable PUT uploads and folder creation\n\
      \x20       --replace          Allow uploads to replace existing files\n\
      \x20       --async            Use the async reactor path (default)\n\
@@ -35,6 +36,7 @@ pub enum ConfigError {
     InvalidPort,
     InvalidHost,
     InvalidBacklog,
+    InvalidIdle,
     RootEmpty,
     RootTooLong,
     EmbeddedNul,
@@ -48,6 +50,7 @@ impl ConfigError {
             ConfigError::InvalidPort => b"port must be an integer in 1..=65535",
             ConfigError::InvalidHost => b"host must be a dotted-quad IPv4 address",
             ConfigError::InvalidBacklog => b"backlog must be an integer in 1..=65535",
+            ConfigError::InvalidIdle => b"idle timeout must be an integer in 1..=3600",
             ConfigError::RootEmpty => b"root directory must not be empty",
             ConfigError::RootTooLong => b"root directory is too long",
             ConfigError::EmbeddedNul => b"root directory contains a NUL byte",
@@ -68,6 +71,7 @@ pub struct Config {
     index: bool,
     port_explicit: bool,
     async_mode: bool,
+    idle_seconds: u16,
 }
 
 #[derive(Debug)]
@@ -92,6 +96,7 @@ impl Config {
         let mut index = true;
         let mut port_explicit = false;
         let mut async_mode = true;
+        let mut idle_seconds = 30u16;
 
         let mut i = 1usize; // skip argv[0]
         while i < args.len() {
@@ -105,6 +110,16 @@ impl Config {
             }
             if arg == b"--quiet" || arg == b"-q" {
                 quiet = true;
+                i += 1;
+                continue;
+            }
+            if arg == b"--idle-timeout" {
+                idle_seconds = parse_idle(take(args, &mut i)?)?;
+                i += 1;
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix(b"--idle-timeout=") {
+                idle_seconds = parse_idle(value)?;
                 i += 1;
                 continue;
             }
@@ -204,6 +219,7 @@ impl Config {
             index,
             port_explicit,
             async_mode,
+            idle_seconds,
         }))
     }
 
@@ -244,6 +260,10 @@ impl Config {
     pub const fn async_mode(&self) -> bool {
         self.async_mode
     }
+
+    pub const fn idle_seconds(&self) -> u16 {
+        self.idle_seconds
+    }
 }
 
 fn take<'a>(args: &'a [&'a [u8]], i: &mut usize) -> Result<&'a [u8], ConfigError> {
@@ -255,6 +275,14 @@ fn parse_port(value: &[u8]) -> Result<u16, ConfigError> {
     let parsed = parse_u16(value).ok_or(ConfigError::InvalidPort)?;
     if parsed == 0 {
         return Err(ConfigError::InvalidPort);
+    }
+    Ok(parsed)
+}
+
+fn parse_idle(value: &[u8]) -> Result<u16, ConfigError> {
+    let parsed = parse_u16(value).ok_or(ConfigError::InvalidIdle)?;
+    if parsed == 0 || parsed > 3600 {
+        return Err(ConfigError::InvalidIdle);
     }
     Ok(parsed)
 }
@@ -360,6 +388,7 @@ mod tests {
         assert!(config.index());
         assert!(!config.port_explicit());
         assert!(config.async_mode());
+        assert_eq!(config.idle_seconds(), 30);
     }
 
     #[test]
@@ -378,6 +407,8 @@ mod tests {
             b"--replace",
             b"--no-index",
             b"--async",
+            b"--idle-timeout",
+            b"5",
         ]);
         assert_eq!(config.root(), b"/srv/www");
         assert_eq!(config.addr().ip, [0, 0, 0, 0]);
@@ -389,6 +420,7 @@ mod tests {
         assert!(!config.index());
         assert!(config.port_explicit());
         assert!(config.async_mode());
+        assert_eq!(config.idle_seconds(), 5);
     }
 
     #[test]
@@ -411,6 +443,8 @@ mod tests {
             &[b"syswebd".as_slice(), b"--host", b"1.2.3"][..],
             &[b"syswebd".as_slice(), b"--host", b"1.2.3.256"][..],
             &[b"syswebd".as_slice(), b"--backlog", b"0"][..],
+            &[b"syswebd".as_slice(), b"--idle-timeout", b"0"][..],
+            &[b"syswebd".as_slice(), b"--idle-timeout", b"3601"][..],
             &[b"syswebd".as_slice(), b"--nope"][..],
         ] {
             assert!(Config::parse(args).is_err(), "accepted {args:?}");

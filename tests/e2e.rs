@@ -814,3 +814,22 @@ fn blocking_fallback_still_works() {
     assert_status(&head, "HTTP/1.1 200 OK");
     assert_eq!(body, b"hello, space");
 }
+
+#[test]
+fn async_idle_timeout_closes_stale_connection() {
+    let server = start_server(&["--idle-timeout", "1"]);
+    let mut stale = TcpStream::connect(("127.0.0.1", server.port)).expect("connect");
+    stale
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("read timeout");
+    stale
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n")
+        .expect("partial request");
+    std::thread::sleep(Duration::from_millis(1500));
+    let mut byte = [0u8; 1];
+    let closed = matches!(stale.read(&mut byte), Ok(0));
+    assert!(closed, "idle connection was not closed");
+
+    let response = get(server.port, "/");
+    assert_status(&split(&response).0, "HTTP/1.1 200 OK");
+}

@@ -188,6 +188,7 @@ OPTIONS:
         --no-index         Disable generated directory indexes
         --async            Use the async reactor path (default)
         --blocking         Use the old blocking server path
+        --idle-timeout <S> Async idle timeout in seconds (default: 30)
     -q, --quiet            Suppress startup and request logs
     -h, --help             Print help
     -V, --version          Print the version
