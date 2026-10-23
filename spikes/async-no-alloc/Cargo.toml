@@ -1,0 +1,23 @@
+[package]
+name = "async-no-alloc-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "async_no_alloc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "async-no-alloc"
+path = "src/main.rs"
+test = false
+bench = false
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+strip = false
+
+[workspace]
