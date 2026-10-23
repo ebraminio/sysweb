@@ -632,6 +632,8 @@ fn multipart_forms_work_for_old_browsers() {
     assert!(!page.contains("<time "));
     assert!(page.contains("id=\"transfer\""));
     assert!(page.contains("#transfer{display:none}"));
+    assert!(!page.contains("' in '"));
+    assert!(!page.contains("'webkitdirectory' in"));
 
     // Classic form post to a directory: filename comes from the part.
     let body = multipart_body("----syswebForm", "old.txt", b"hello from a form");

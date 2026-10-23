@@ -268,7 +268,7 @@ const JS: &[u8] = br###"
 
       var folder = byId('folder');
       if (folder) {
-        if (!('webkitdirectory' in folder)) {
+        if (typeof folder.webkitdirectory === 'undefined') {
           var folderLabel = byId('folder-label');
           if (folderLabel) folderLabel.style.display = 'none';
         } else {
@@ -318,7 +318,8 @@ const JS: &[u8] = br###"
   // IE8/old engines render <details> children raw. Hide the transfer section
   // unless the native details/summary toggle exists.
   var transfer = byId('transfer');
-  if (transfer && !('open' in document.createElement('details'))) {
+  var detailsProbe = document.createElement('details');
+  if (transfer && typeof detailsProbe.open === 'undefined') {
     try { transfer.style.display = 'none'; } catch (e) {}
   }
 
