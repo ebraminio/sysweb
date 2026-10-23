@@ -215,9 +215,12 @@ The built-in index always contains a plain HTML form
 detecting the File API and shows the drag/drop tools; a browser with
 JavaScript disabled, or an old browser without those APIs, keeps the classic
 form and can still upload one file. Classic form posts take the filename from
-the part; a post to `/files/fixed.txt` uses the URL path instead.
+the part; a post to `/files/fixed.txt` uses the URL path instead. After a
+successful classic-form post the server returns `303 See Other` to the current
+directory, so the browser reloads the listing/table.
 
-The server answers `201 Created` on uploads and folder creation, `409 Conflict`
+API uploads and folder creation answer `201 Created`; a classic form receives
+the redirect above. The server answers `409 Conflict`
 when a file exists without `--replace`, `411 Length Required` when a file
 upload has no `Content-Length`, and `415 Unsupported Media Type` for a
 non-multipart form post. There is no per-request upload size cap.
@@ -334,9 +337,9 @@ Current stripped sizes from this workspace:
 | Target | Size | Budget |
 | --- | ---: | ---: |
 | macOS arm64 | 117,664 B | 140 KiB |
-| Linux x86_64 | 88,784 B | 108 KiB |
-| Linux aarch64 | 85,800 B | 104 KiB |
-| Windows x86_64 | 84,480 B | 116 KiB |
+| Linux x86_64 | 92,824 B | 108 KiB |
+| Linux aarch64 | 90,144 B | 104 KiB |
+| Windows x86_64 | 88,576 B | 116 KiB |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
 workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and

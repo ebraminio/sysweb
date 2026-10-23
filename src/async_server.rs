@@ -167,6 +167,7 @@ struct Slot<P: AsyncPlatform> {
     keep_alive: bool,
     requests: u32,
     body_end: usize,
+    form_redirect: bool,
 }
 
 impl<P: AsyncPlatform> Slot<P> {
@@ -197,6 +198,7 @@ impl<P: AsyncPlatform> Slot<P> {
             keep_alive: false,
             requests: 0,
             body_end: 0,
+            form_redirect: false,
         }
     }
 
@@ -222,6 +224,7 @@ impl<P: AsyncPlatform> Slot<P> {
         self.keep_alive = false;
         self.requests = 0;
         self.body_end = 0;
+        self.form_redirect = false;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -562,6 +565,11 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
     let body_offset = request.body_offset;
     let body_len = content_length.unwrap_or(0).min(usize::MAX as u64) as usize;
     slot.body_end = body_offset.saturating_add(body_len).min(slot.request_len);
+    slot.form_redirect = method == Method::Post
+        && request
+            .target
+            .windows(b"?sysweb-form=1".len())
+            .any(|window| window == b"?sysweb-form=1");
     slot.keep_alive = request.connection.keep_alive_for(request.version)
         && !(matches!(method, Method::Get | Method::Head) && content_length.unwrap_or(0) > 0);
     let mut content_type = [0u8; 256];
@@ -762,17 +770,7 @@ fn prepare_put<P: AsyncPlatform>(
         match platform.create_dir(rel_path) {
             Ok(()) => {
                 if total == 0 {
-                    let _ = slot.prepare_response(
-                        Status::Created,
-                        CREATED.len() as u64,
-                        b"text/plain; charset=utf-8",
-                        CREATED,
-                        false,
-                        None,
-                        None,
-                        false,
-                    );
-                    slot.log_len = CREATED.len() as u64;
+                    prepare_upload_response(slot, CREATED);
                 } else {
                     slot.upload = Some(Upload::Discard { remaining: total });
                     slot.state = State::ReadingBody;
@@ -826,17 +824,7 @@ fn prepare_put<P: AsyncPlatform>(
     let expect_continue = expect_continue && take == 0 && remaining > 0;
     if remaining == 0 {
         drop(file);
-        let _ = slot.prepare_response(
-            Status::Created,
-            UPLOADED.len() as u64,
-            b"text/plain; charset=utf-8",
-            UPLOADED,
-            false,
-            None,
-            None,
-            false,
-        );
-        slot.log_len = UPLOADED.len() as u64;
+        prepare_upload_response(slot, UPLOADED);
         return;
     }
     let mut path = [0u8; MAX_PATH];
@@ -937,17 +925,7 @@ fn prepare_post<P: AsyncPlatform>(
             slot.prepare_error(multipart_status(error), false);
             return;
         }
-        let _ = slot.prepare_response(
-            Status::Created,
-            UPLOADED.len() as u64,
-            b"text/plain; charset=utf-8",
-            UPLOADED,
-            false,
-            None,
-            None,
-            false,
-        );
-        slot.log_len = UPLOADED.len() as u64;
+        prepare_upload_response(slot, UPLOADED);
         return;
     }
 
@@ -1015,6 +993,37 @@ fn multipart_status(error: multipart::ParseError) -> Status {
     }
 }
 
+fn prepare_upload_response<P: AsyncPlatform>(slot: &mut Slot<P>, body: &[u8]) {
+    if slot.form_redirect {
+        let mut location = [0u8; MAX_URL_PATH];
+        let len = slot.log_path_len.min(location.len());
+        location[..len].copy_from_slice(&slot.log_path[..len]);
+        let _ = slot.prepare_response(
+            Status::SeeOther,
+            0,
+            b"text/plain; charset=utf-8",
+            b"",
+            false,
+            Some(&location[..len]),
+            None,
+            false,
+        );
+        slot.log_len = 0;
+        return;
+    }
+    let _ = slot.prepare_response(
+        Status::Created,
+        body.len() as u64,
+        b"text/plain; charset=utf-8",
+        body,
+        false,
+        None,
+        None,
+        false,
+    );
+    slot.log_len = body.len() as u64;
+}
+
 fn finish_upload<P: AsyncPlatform>(platform: &mut P, slot: &mut Slot<P>) {
     let Some(upload) = slot.upload.take() else {
         return;
@@ -1035,17 +1044,8 @@ fn finish_upload<P: AsyncPlatform>(platform: &mut P, slot: &mut Slot<P>) {
         }
         Upload::Discard { .. } => (Status::Created, CREATED),
     };
-    let _ = slot.prepare_response(
-        status,
-        body.len() as u64,
-        b"text/plain; charset=utf-8",
-        body,
-        false,
-        None,
-        None,
-        false,
-    );
-    slot.log_len = body.len() as u64;
+    let _ = status;
+    prepare_upload_response(slot, body);
 }
 
 fn read_body_slot<P: AsyncPlatform>(
@@ -1439,6 +1439,7 @@ fn finish_response<P: AsyncPlatform>(
     slot.status = Status::Ok;
     slot.keep_alive = false;
     slot.body_end = 0;
+    slot.form_redirect = false;
     slot.idle_ticks = 0;
     slot.state = State::Reading;
 
@@ -1528,4 +1529,5 @@ fn close_slot<P: AsyncPlatform>(
     slot.keep_alive = false;
     slot.requests = 0;
     slot.body_end = 0;
+    slot.form_redirect = false;
 }

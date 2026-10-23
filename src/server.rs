@@ -322,6 +322,10 @@ impl<P: Platform> Server<P> {
             self.send_error(stream, Status::MethodNotAllowed, false, ALLOW_READ);
             return;
         }
+        let form_redirect = request
+            .target
+            .windows(b"?sysweb-form=1".len())
+            .any(|window| window == b"?sysweb-form=1");
 
         let content_length = match request.content_length {
             Some(length) => length,
@@ -433,20 +437,25 @@ impl<P: Platform> Server<P> {
         }
         drop(sink);
 
+        let (status, body, location) = if form_redirect {
+            (Status::SeeOther, b"".as_slice(), Some(&url_path[..url_len]))
+        } else {
+            (Status::Created, UPLOADED, None)
+        };
         if self.send_body(
             stream,
-            Status::Created,
+            status,
             b"text/plain; charset=utf-8",
-            UPLOADED,
+            body,
             false,
             b"",
-            None,
+            location,
         ) {
             self.log_request(
                 Method::Post,
                 &url_path[..url_len],
-                Status::Created,
-                UPLOADED.len() as u64,
+                status,
+                body.len() as u64,
             );
         }
     }

@@ -631,6 +631,7 @@ fn multipart_forms_work_for_old_browsers() {
     assert!(page.contains("id=\"paste-text\""));
     assert!(page.contains("id=\"text-dialog\""));
     assert!(page.contains("id=\"text-body\""));
+    assert!(page.contains("action=\"?sysweb-form=1\""));
     assert!(page.contains("webkitGetAsEntry"));
     assert!(page.contains("name.split('.')[0] === 'image'"));
     assert!(page.contains("Drop files or folders here, or paste files/images/text"));
@@ -1004,4 +1005,50 @@ fn keep_alive_idle_timeout_closes_between_requests() {
 
     let response = get(server.port, "/");
     assert_status(&split(&response).0, "HTTP/1.1 200 OK");
+}
+
+#[test]
+fn classic_form_post_redirects_back_to_the_listing() {
+    let server = start_server(&["--upload"]);
+    let body = multipart_body("----redirect", "redirected.txt", b"back to listing");
+    let raw = format!(
+        "POST /?sysweb-form=1 HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=----redirect\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    let mut request_bytes = raw;
+    request_bytes.extend_from_slice(&body);
+    let response = request(server.port, &request_bytes);
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 303 See Other");
+    assert_eq!(header(&head, "Location"), Some("/"));
+    assert!(body.is_empty());
+
+    let response = get(server.port, "/redirected.txt");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"back to listing");
+}
+
+#[test]
+fn classic_form_redirect_also_works_in_blocking_mode() {
+    let server = start_server(&["--upload", "--blocking"]);
+    let body = multipart_body("----redirectb", "redirected-blocking.txt", b"blocking");
+    let raw = format!(
+        "POST /?sysweb-form=1 HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=----redirectb\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    let mut request_bytes = raw;
+    request_bytes.extend_from_slice(&body);
+    let response = request(server.port, &request_bytes);
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 303 See Other");
+    assert_eq!(header(&head, "Location"), Some("/"));
+    assert!(body.is_empty());
+
+    let response = get(server.port, "/redirected-blocking.txt");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"blocking");
 }

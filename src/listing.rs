@@ -590,7 +590,7 @@ pub fn render<P: Platform>(
     }
 
     if upload {
-        if !out.push(b"<form id=\"classic-upload\" class=\"tools\" method=\"post\" enctype=\"multipart/form-data\" action=\"\">")
+        if !out.push(b"<form id=\"classic-upload\" class=\"tools\" method=\"post\" enctype=\"multipart/form-data\" action=\"?sysweb-form=1\">")
             || !out.push(b"<label class=\"btn primary\">Upload (form)<input type=\"file\" name=\"file\"></label>")
             || !out.push(b"<button class=\"btn\" type=\"submit\">Upload</button>")
             || !out.push(b"</form>\n")

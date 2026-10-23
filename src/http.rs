@@ -260,6 +260,7 @@ pub enum Status {
     Ok,
     Created,
     MovedPermanently,
+    SeeOther,
     BadRequest,
     Forbidden,
     NotFound,
@@ -281,6 +282,7 @@ impl Status {
             Status::Ok => 200,
             Status::Created => 201,
             Status::MovedPermanently => 301,
+            Status::SeeOther => 303,
             Status::BadRequest => 400,
             Status::Forbidden => 403,
             Status::NotFound => 404,
@@ -302,6 +304,7 @@ impl Status {
             Status::Ok => b"OK",
             Status::Created => b"Created",
             Status::MovedPermanently => b"Moved Permanently",
+            Status::SeeOther => b"See Other",
             Status::BadRequest => b"Bad Request",
             Status::Forbidden => b"Forbidden",
             Status::NotFound => b"Not Found",
@@ -321,7 +324,7 @@ impl Status {
     /// A complete, static error body. Empty for successful/redirect statuses.
     pub const fn error_body(self) -> &'static [u8] {
         match self {
-            Status::Ok | Status::Created | Status::MovedPermanently => b"",
+            Status::Ok | Status::Created | Status::MovedPermanently | Status::SeeOther => b"",
             Status::BadRequest => b"400 Bad Request\n",
             Status::Forbidden => b"403 Forbidden\n",
             Status::NotFound => b"404 Not Found\n",
@@ -476,6 +479,7 @@ mod tests {
         assert_eq!(Status::Ok.error_body(), b"");
         assert_eq!(Status::Created.code(), 201);
         assert_eq!(Status::MovedPermanently.code(), 301);
+        assert_eq!(Status::SeeOther.code(), 303);
         assert_eq!(Status::NotFound.code(), 404);
         assert_eq!(Status::NotFound.reason(), b"Not Found");
         assert_eq!(Status::NotFound.error_body(), b"404 Not Found\n");
