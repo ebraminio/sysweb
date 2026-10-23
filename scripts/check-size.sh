@@ -18,10 +18,10 @@ Darwin/arm64)
     budget=122880 # 120 KiB; keep-alive and interface discovery included
     ;;
 Linux/x86_64)
-    budget=86016 # 84 KiB; include the upload UI and async reactor
+    budget=90112 # 88 KiB; include the upload UI, MIME table, and async reactor
     ;;
 Linux/aarch64 | Linux/arm64)
-    budget=86016 # 84 KiB; include the upload UI and async reactor
+    budget=86016 # 84 KiB; include the upload UI, MIME table, and async reactor
     ;;
 *)
     echo "check-size: no budget for $os/$arch (skipped)"

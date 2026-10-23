@@ -534,7 +534,7 @@ pub fn render<P: Platform>(
                 b"<button id=\"mkdir\" class=\"btn\" type=\"button\">New folder</button>",
             )
             || !out.push(b"<span id=\"status\" role=\"status\" aria-live=\"polite\"></span>")
-            || !out.push(b"</div>\n<div id=\"drop\" class=\"js-only\">Drop files or folders here, or paste files/text</div>\n")
+            || !out.push(b"</div>\n<div id=\"drop\" class=\"js-only\">Drop files or folders here, or paste files/images/text</div>\n")
         {
             return false;
         }
