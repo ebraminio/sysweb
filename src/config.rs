@@ -21,6 +21,7 @@ pub const USAGE: &str = concat!(
      \x20       --backlog <N>      Listen backlog (default: 128)\n\
      \x20       --upload           Enable PUT uploads and folder creation\n\
      \x20       --replace          Allow uploads to replace existing files\n\
+     \x20       --async            Use the experimental async GET/HEAD path\n\
      \x20       --no-index         Disable generated directory indexes\n\
      \x20   -q, --quiet            Suppress startup and request logs\n\
      \x20   -h, --help             Print this help\n\
@@ -65,6 +66,7 @@ pub struct Config {
     replace: bool,
     index: bool,
     port_explicit: bool,
+    async_mode: bool,
 }
 
 #[derive(Debug)]
@@ -88,6 +90,7 @@ impl Config {
         let mut replace = false;
         let mut index = true;
         let mut port_explicit = false;
+        let mut async_mode = false;
 
         let mut i = 1usize; // skip argv[0]
         while i < args.len() {
@@ -111,6 +114,11 @@ impl Config {
             }
             if arg == b"--replace" {
                 replace = true;
+                i += 1;
+                continue;
+            }
+            if arg == b"--async" {
+                async_mode = true;
                 i += 1;
                 continue;
             }
@@ -189,6 +197,7 @@ impl Config {
             replace,
             index,
             port_explicit,
+            async_mode,
         }))
     }
 
@@ -224,6 +233,10 @@ impl Config {
     /// back to the next free port.
     pub const fn port_explicit(&self) -> bool {
         self.port_explicit
+    }
+
+    pub const fn async_mode(&self) -> bool {
+        self.async_mode
     }
 }
 
@@ -340,6 +353,7 @@ mod tests {
         assert!(!config.replace());
         assert!(config.index());
         assert!(!config.port_explicit());
+        assert!(!config.async_mode());
     }
 
     #[test]
@@ -357,6 +371,7 @@ mod tests {
             b"--upload",
             b"--replace",
             b"--no-index",
+            b"--async",
         ]);
         assert_eq!(config.root(), b"/srv/www");
         assert_eq!(config.addr().ip, [0, 0, 0, 0]);
@@ -367,6 +382,7 @@ mod tests {
         assert!(config.replace());
         assert!(!config.index());
         assert!(config.port_explicit());
+        assert!(config.async_mode());
     }
 
     #[test]

@@ -7,11 +7,11 @@ use crate::listing::{self, LISTING_BUF};
 use crate::mime;
 use crate::multipart::{self, Sink, SinkError};
 use crate::path::{self, MAX_PATH, MAX_URL_PATH};
-use crate::platform::{Error, FileInfo, Platform, SocketAddr};
+use crate::platform::{AsyncPlatform, Error, FileInfo, Platform, SocketAddr};
 
-const REQUEST_BUF: usize = 8192;
+pub(crate) const REQUEST_BUF: usize = 8192;
 const FILE_BUF: usize = 16 * 1024;
-const HEADER_BUF: usize = 4096;
+pub(crate) const HEADER_BUF: usize = 4096;
 const LOG_BUF: usize = 1200;
 const LOCATION_BUF: usize = MAX_URL_PATH * 3 + 2;
 
@@ -35,6 +35,14 @@ pub struct Server<P: Platform> {
 impl<P: Platform> Server<P> {
     pub fn new(platform: P, config: Config) -> Self {
         Self { platform, config }
+    }
+
+    /// Run the experimental non-blocking GET/HEAD server.
+    pub fn run_async(self) -> !
+    where
+        P: AsyncPlatform,
+    {
+        crate::async_server::run(self.platform, self.config)
     }
 
     /// Bind, then serve connections forever. Fatal errors terminate the
@@ -1009,7 +1017,7 @@ impl<P: Platform> Sink for MultipartSink<'_, P> {
 
 /// Convert a normalized URL path (`/a/b`) into a path relative to the
 /// document-root fd (`a/b`). The root itself is `"."`.
-fn root_relative(url_path: &[u8]) -> &[u8] {
+pub(crate) fn root_relative(url_path: &[u8]) -> &[u8] {
     if url_path.len() <= 1 {
         b"."
     } else {
@@ -1024,7 +1032,7 @@ enum ReadOutcome {
     Io,
 }
 
-fn resolve_range(spec: http::RangeSpec, total: u64) -> Option<(u64, u64)> {
+pub(crate) fn resolve_range(spec: http::RangeSpec, total: u64) -> Option<(u64, u64)> {
     if total == 0 {
         return None;
     }
@@ -1054,7 +1062,7 @@ fn resolve_range(spec: http::RangeSpec, total: u64) -> Option<(u64, u64)> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_header(
+pub(crate) fn build_header(
     buffer: &mut FixedBuf<HEADER_BUF>,
     status: Status,
     content_length: u64,

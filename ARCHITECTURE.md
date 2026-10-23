@@ -477,6 +477,12 @@ reviewable.
 
 ## Async design (milestone 1)
 
+The first async slice is implemented: `--async` uses an epoll (Linux) or
+kqueue (macOS) readiness reactor, non-blocking accept/read/write/sendfile, and
+a fixed-slot GET/HEAD state machine. Metadata and listings remain synchronous;
+uploads still use the blocking path. This is not the final io_uring backend, but
+it establishes the state-machine and liveness properties.
+
 The blocking `Platform` trait is deliberately shaped so the async version is an
 extension, not a rewrite. The async backend will not use Rust `async`/`await`:
 a futures executor and its state machines tend to want allocation and add a lot

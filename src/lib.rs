@@ -14,6 +14,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod async_server;
 pub mod config;
 pub mod fixedbuf;
 pub mod http;
@@ -47,8 +48,13 @@ pub fn run(args: &[&[u8]]) -> ! {
             platform::exit(0)
         }
         Ok(ParseOutcome::Run(config)) => {
+            let async_mode = config.async_mode();
             let mut server = Server::new(platform::Sys::new(), config);
-            server.run()
+            if async_mode {
+                server.run_async()
+            } else {
+                server.run()
+            }
         }
         Err(error) => {
             platform::write_stderr(b"syswebd: ");

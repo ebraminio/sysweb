@@ -705,3 +705,50 @@ fn replace_mode_overwrites() {
     let (_, body) = split(&response);
     assert_eq!(body, b"new contents");
 }
+
+#[test]
+fn async_get_and_liveness() {
+    let server = start_server(&["--async"]);
+
+    let response = get(server.port, "/");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"<h1>index</h1>");
+
+    let response = get(server.port, "/hello%20world.txt");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"hello, space");
+
+    let response = get_range(server.port, "/hello%20world.txt", "bytes=1-4");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 206 Partial Content");
+    assert_eq!(body, b"ello");
+
+    let response = head_range(server.port, "/hello%20world.txt", "bytes=0-3");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 206 Partial Content");
+    assert!(body.is_empty());
+
+    let response = get(server.port, "/missing");
+    assert_status(&split(&response).0, "HTTP/1.1 404 Not Found");
+
+    let response = get(server.port, "/sub");
+    let (head, _) = split(&response);
+    assert_status(&head, "HTTP/1.1 301 Moved Permanently");
+
+    let response = get(server.port, "/assets/");
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert!(text(body).contains("hello world.txt"));
+
+    // A client that stops reading a large download must not prevent another
+    // request from completing. The first connection occupies one slot only.
+    let mut slow = TcpStream::connect(("127.0.0.1", server.port)).expect("slow connect");
+    slow.write_all(b"GET /huge.bin HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .expect("slow request");
+    std::thread::sleep(Duration::from_millis(150));
+    let response = get(server.port, "/");
+    assert_status(&split(&response).0, "HTTP/1.1 200 OK");
+    drop(slow);
+}

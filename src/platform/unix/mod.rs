@@ -25,7 +25,10 @@ compile_error!(
      the Windows CRT-free backend is on the roadmap"
 );
 
-use super::{DirEntry, EntryKind, Error, FileInfo, Platform, Result, SocketAddr};
+use super::{
+    AsyncPlatform, DirEntry, EntryKind, Error, Event, FileInfo, Interest, Platform, Result,
+    SocketAddr,
+};
 
 const DIR_BUFFER: usize = 4096;
 const DT_DIR: u8 = 4;
@@ -104,6 +107,16 @@ pub struct Stream {
 
 pub struct File {
     fd: i32,
+}
+
+pub struct Poller {
+    fd: i32,
+}
+
+impl Drop for Poller {
+    fn drop(&mut self) {
+        let _ = abi::close(self.fd);
+    }
 }
 
 pub struct Dir {
@@ -407,6 +420,157 @@ impl Platform for Sys {
 
     fn exit(&mut self, code: i32) -> ! {
         abi::exit(code)
+    }
+}
+
+impl AsyncPlatform for Sys {
+    type Poller = Poller;
+
+    fn poller(&mut self) -> Result<Self::Poller> {
+        #[cfg(target_os = "linux")]
+        let fd = abi::epoll_create()?;
+        #[cfg(target_os = "macos")]
+        let fd = abi::kqueue()?;
+        Ok(Poller { fd })
+    }
+
+    fn register_listener(
+        &mut self,
+        poller: &mut Self::Poller,
+        listener: &Self::Listener,
+        token: usize,
+    ) -> Result<()> {
+        self.register_fd(poller, listener.fd, token, false)
+    }
+
+    fn register_stream(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        token: usize,
+    ) -> Result<()> {
+        self.register_fd(poller, stream.fd, token, false)
+    }
+
+    fn set_interest(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        token: usize,
+        interest: Interest,
+    ) -> Result<()> {
+        let write = interest == Interest::Writable;
+        #[cfg(target_os = "linux")]
+        {
+            abi::epoll_modify(poller.fd, stream.fd, token, write)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            abi::kqueue_modify(poller.fd, stream.fd, token, write)
+        }
+    }
+
+    fn deregister_stream(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        _token: usize,
+    ) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            abi::epoll_delete(poller.fd, stream.fd)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            abi::kqueue_delete(poller.fd, stream.fd)
+        }
+    }
+
+    fn wait(
+        &mut self,
+        poller: &mut Self::Poller,
+        events: &mut [Event],
+        timeout_ms: i32,
+    ) -> Result<usize> {
+        #[cfg(target_os = "linux")]
+        {
+            abi::epoll_wait(poller.fd, events, timeout_ms)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            abi::kqueue_wait(poller.fd, events, timeout_ms)
+        }
+    }
+
+    fn set_listener_nonblocking(&mut self, listener: &Self::Listener) -> Result<()> {
+        abi::set_nonblocking(listener.fd)
+    }
+
+    fn accept_nonblocking(&mut self, listener: &Self::Listener) -> Result<Self::Stream> {
+        loop {
+            match abi::accept(listener.fd) {
+                Err(Error::Interrupted) => continue,
+                Ok(fd) => {
+                    abi::configure_stream_nonblocking(fd)?;
+                    return Ok(Stream { fd });
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn read_nonblocking(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize> {
+        loop {
+            match abi::read(stream.fd, buf) {
+                Err(Error::Interrupted) => continue,
+                other => return other,
+            }
+        }
+    }
+
+    fn write_nonblocking(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<usize> {
+        loop {
+            match abi::send(stream.fd, buf) {
+                Err(Error::Interrupted) => continue,
+                other => return other,
+            }
+        }
+    }
+
+    fn send_file_nonblocking(
+        &mut self,
+        stream: &mut Self::Stream,
+        file: &mut Self::File,
+        offset: u64,
+        len: u64,
+    ) -> Result<u64> {
+        let want = core::cmp::min(len, 1 << 30) as usize;
+        loop {
+            match abi::sendfile(stream.fd, file.fd, offset, want) {
+                Err(Error::Interrupted) => continue,
+                Ok(count) => return Ok(count as u64),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+}
+
+impl Sys {
+    fn register_fd(
+        &mut self,
+        poller: &mut Poller,
+        fd: i32,
+        token: usize,
+        write: bool,
+    ) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            abi::epoll_add(poller.fd, fd, token, write)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            abi::kqueue_add(poller.fd, fd, token, write)
+        }
     }
 }
 

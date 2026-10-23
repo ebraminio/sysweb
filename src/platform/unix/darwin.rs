@@ -75,6 +75,17 @@ struct SockaddrIn {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+struct Kevent {
+    ident: usize,
+    filter: i16,
+    flags: u16,
+    fflags: u32,
+    data: i64,
+    udata: usize,
+}
+
+#[repr(C)]
 struct Dirent {
     d_ino: u64,
     d_seekoff: i64,
@@ -117,6 +128,19 @@ unsafe extern "C" {
     fn c_close(fd: i32) -> i32;
     #[link_name = "nanosleep"]
     fn c_nanosleep(request: *const Timespec, remaining: *mut Timespec) -> i32;
+    #[link_name = "fcntl"]
+    fn c_fcntl(fd: i32, cmd: i32, ...) -> i32;
+    #[link_name = "kqueue"]
+    fn c_kqueue() -> i32;
+    #[link_name = "kevent"]
+    fn c_kevent(
+        kq: i32,
+        changes: *const Kevent,
+        nchanges: i32,
+        events: *mut Kevent,
+        nevents: i32,
+        timeout: *const Timespec,
+    ) -> i32;
     #[link_name = "fdopendir"]
     fn c_fdopendir(fd: i32) -> *mut u8;
     #[link_name = "readdir"]
@@ -303,6 +327,106 @@ pub fn configure_stream(fd: i32) -> Result<()> {
         )
     })
     .map(|_| ())
+}
+
+pub fn configure_stream_nonblocking(fd: i32) -> Result<()> {
+    configure_stream(fd)?;
+    set_nonblocking(fd)
+}
+
+pub fn set_nonblocking(fd: i32) -> Result<()> {
+    const F_GETFL: i32 = 3;
+    const F_SETFL: i32 = 4;
+    const O_NONBLOCK: i32 = 0x4;
+    let flags = cvt(unsafe { c_fcntl(fd, F_GETFL) })?;
+    cvt(unsafe { c_fcntl(fd, F_SETFL, flags | O_NONBLOCK) }).map(|_| ())
+}
+
+const EV_ADD: u16 = 0x1;
+const EV_DELETE: u16 = 0x2;
+const EV_ENABLE: u16 = 0x4;
+const EV_EOF: u16 = 0x8000;
+const EV_ERROR: u16 = 0x4000;
+const EVFILT_READ: i16 = -1;
+const EVFILT_WRITE: i16 = -2;
+
+pub fn kqueue() -> Result<i32> {
+    cvt(unsafe { c_kqueue() })
+}
+
+fn kevent_change(kq: i32, change: Kevent) -> Result<()> {
+    let result = unsafe { c_kevent(kq, &change, 1, null_mut(), 0, null_mut()) };
+    cvt(result).map(|_| ())
+}
+
+fn change(fd: i32, filter: i16, flags: u16, token: usize) -> Kevent {
+    Kevent {
+        ident: fd as usize,
+        filter,
+        flags,
+        fflags: 0,
+        data: 0,
+        udata: token,
+    }
+}
+
+pub fn kqueue_add(kq: i32, fd: i32, token: usize, write: bool) -> Result<()> {
+    kevent_change(
+        kq,
+        change(
+            fd,
+            if write { EVFILT_WRITE } else { EVFILT_READ },
+            EV_ADD | EV_ENABLE,
+            token,
+        ),
+    )
+}
+
+pub fn kqueue_delete(kq: i32, fd: i32) -> Result<()> {
+    let _ = kevent_change(kq, change(fd, EVFILT_READ, EV_DELETE, 0));
+    let _ = kevent_change(kq, change(fd, EVFILT_WRITE, EV_DELETE, 0));
+    Ok(())
+}
+
+pub fn kqueue_modify(kq: i32, fd: i32, token: usize, write: bool) -> Result<()> {
+    kqueue_delete(kq, fd)?;
+    kqueue_add(kq, fd, token, write)
+}
+
+pub fn kqueue_wait(kq: i32, events: &mut [super::super::Event], timeout_ms: i32) -> Result<usize> {
+    let mut raw = [Kevent {
+        ident: 0,
+        filter: 0,
+        flags: 0,
+        fflags: 0,
+        data: 0,
+        udata: 0,
+    }; 64];
+    let count = core::cmp::min(events.len(), raw.len());
+    let timeout = if timeout_ms < 0 {
+        null_mut()
+    } else {
+        let timeout = Timespec {
+            tv_sec: (timeout_ms / 1000) as i64,
+            tv_nsec: ((timeout_ms % 1000) * 1_000_000) as i64,
+        };
+        &timeout as *const Timespec as *mut Timespec
+    };
+    let ready = unsafe { c_kevent(kq, null_mut(), 0, raw.as_mut_ptr(), count as i32, timeout) };
+    let ready = cvt(ready)? as usize;
+    for index in 0..ready {
+        let event = &raw[index];
+        let error = event.flags & EV_ERROR != 0;
+        let readable = event.filter == EVFILT_READ || (event.flags & EV_EOF != 0);
+        let writable = event.filter == EVFILT_WRITE;
+        events[index] = super::super::Event {
+            token: event.udata,
+            readable,
+            writable,
+            error,
+        };
+    }
+    Ok(ready)
 }
 
 pub fn block_sigpipe() -> Result<()> {

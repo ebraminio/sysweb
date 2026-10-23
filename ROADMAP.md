@@ -128,10 +128,10 @@ executor and no allocation.
 
 ### Abstraction
 
-- [ ] Add `Reactor` with `register`, `deregister`, and `wait`.
-- [ ] Add `Interest`/`Event` types and a stable per-connection token.
-- [ ] Keep `Platform` for files and socket creation; add non-blocking variants
-      (`accept_nonblocking`, `read_nonblocking`, `write_nonblocking`).
+- [x] Add a readiness reactor with register/deregister/wait (epoll first,
+      kqueue next; io_uring remains the target Linux backend).
+- [x] Add `Interest`/`Event` types and a stable per-connection token.
+- [x] Keep `Platform` for files; add non-blocking listener/stream variants.
 - [ ] Unified `WouldBlock` handling; no busy loops.
 - [ ] A `Reactor` implementation for testing in memory (scripted events).
 
@@ -149,9 +149,9 @@ executor and no allocation.
 
 ### Server state machine
 
-- [ ] Fixed `Connection` slots (`MAX_CONNECTIONS`, no heap).
-- [ ] States: `ReadingHeaders → Opening → WritingHeaders → Streaming`,
-      plus `ReadingBody → WritingFile` for uploads, `Listing`, and `Closing`.
+- [x] Fixed `Connection` slots for the GET/HEAD async path (no heap).
+- [x] States for `ReadingHeaders → WritingHeaders → Streaming`, plus listing
+      and closing; `ReadingBody → WritingFile` for uploads remains.
 - [ ] Per-slot deadlines for header read, idle keep-alive, and write progress.
 - [ ] Bounded accept loop per event to avoid starving existing connections.
 - [ ] Replace the blocking accept backoff with a reactor timer/deadline and

@@ -85,6 +85,76 @@ pub struct DirEntry {
     pub mtime: i64,
 }
 
+/// Readiness interest for the reactor backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Interest {
+    Readable,
+    Writable,
+}
+
+/// One readiness event returned by `AsyncPlatform::wait`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Event {
+    pub token: usize,
+    pub readable: bool,
+    pub writable: bool,
+    pub error: bool,
+}
+
+/// Non-blocking OS services used by the async server.
+///
+/// The blocking `Platform` trait remains for file/metadata operations and for
+/// the existing server path. Only socket progress is required to be async in
+/// the first milestone.
+pub trait AsyncPlatform: Platform {
+    type Poller;
+
+    fn poller(&mut self) -> Result<Self::Poller>;
+    fn register_listener(
+        &mut self,
+        poller: &mut Self::Poller,
+        listener: &Self::Listener,
+        token: usize,
+    ) -> Result<()>;
+    fn register_stream(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        token: usize,
+    ) -> Result<()>;
+    fn set_interest(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        token: usize,
+        interest: Interest,
+    ) -> Result<()>;
+    fn deregister_stream(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        token: usize,
+    ) -> Result<()>;
+    fn wait(
+        &mut self,
+        poller: &mut Self::Poller,
+        events: &mut [Event],
+        timeout_ms: i32,
+    ) -> Result<usize>;
+
+    fn set_listener_nonblocking(&mut self, listener: &Self::Listener) -> Result<()>;
+    fn accept_nonblocking(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
+    fn read_nonblocking(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
+    fn write_nonblocking(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<usize>;
+    fn send_file_nonblocking(
+        &mut self,
+        stream: &mut Self::Stream,
+        file: &mut Self::File,
+        offset: u64,
+        len: u64,
+    ) -> Result<u64>;
+}
+
 /// The OS services used by the server.
 ///
 /// Types returned by the backend own their OS handles and close them on drop.

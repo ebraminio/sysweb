@@ -23,6 +23,10 @@ mod nr {
     pub const BIND: usize = 49;
     pub const LISTEN: usize = 50;
     pub const SETSOCKOPT: usize = 54;
+    pub const FCNTL: usize = 72;
+    pub const EPOLL_CREATE1: usize = 291;
+    pub const EPOLL_CTL: usize = 233;
+    pub const EPOLL_WAIT: usize = 232;
     pub const GETDENTS64: usize = 217;
     pub const EXIT_GROUP: usize = 231;
     pub const OPENAT2: usize = 437;
@@ -45,6 +49,10 @@ mod nr {
     pub const BIND: usize = 200;
     pub const LISTEN: usize = 201;
     pub const SETSOCKOPT: usize = 208;
+    pub const FCNTL: usize = 25;
+    pub const EPOLL_CREATE1: usize = 20;
+    pub const EPOLL_CTL: usize = 21;
+    pub const EPOLL_WAIT: usize = 22;
     pub const GETDENTS64: usize = 61;
     pub const EXIT_GROUP: usize = 94;
     pub const OPENAT2: usize = 437;
@@ -87,6 +95,18 @@ const STATX_MTIME_OFFSET: usize = 112;
 const STATX_BUFFER_SIZE: usize = 256;
 const S_IFMT: u32 = 0o170000;
 const S_IFDIR: u32 = 0o040000;
+
+const EPOLLIN: u32 = 0x001;
+const EPOLLOUT: u32 = 0x004;
+const EPOLLERR: u32 = 0x008;
+const EPOLLHUP: u32 = 0x010;
+const EPOLLRDHUP: u32 = 0x2000;
+const EPOLL_CTL_ADD: usize = 1;
+const EPOLL_CTL_DEL: usize = 2;
+const EPOLL_CTL_MOD: usize = 3;
+const O_NONBLOCK: usize = 0x800;
+const F_GETFL: usize = 3;
+const F_SETFL: usize = 4;
 
 #[cfg(target_arch = "x86_64")]
 unsafe fn syscall6(
@@ -416,6 +436,103 @@ pub fn block_sigpipe() -> Result<()> {
 
 pub fn configure_stream(_fd: i32) -> Result<()> {
     Ok(())
+}
+
+pub fn configure_stream_nonblocking(fd: i32) -> Result<()> {
+    set_nonblocking(fd)
+}
+
+pub fn set_nonblocking(fd: i32) -> Result<()> {
+    let flags = unsafe { syscall6(FCNTL, fd as usize, F_GETFL, 0, 0, 0, 0) };
+    let flags = decode(flags)?;
+    let result = unsafe { syscall6(FCNTL, fd as usize, F_SETFL, flags | O_NONBLOCK, 0, 0, 0) };
+    decode(result).map(|_| ())
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+struct EpollEvent {
+    events: u32,
+    data: u64,
+}
+
+impl EpollEvent {
+    fn new(events: u32, token: usize) -> Self {
+        Self {
+            events,
+            data: token as u64,
+        }
+    }
+}
+
+pub fn epoll_create() -> Result<i32> {
+    let result = unsafe { syscall6(EPOLL_CREATE1, 0x80000, 0, 0, 0, 0, 0) };
+    Ok(decode(result)? as i32)
+}
+
+fn epoll_ctl(poller: i32, op: usize, fd: i32, event: &mut EpollEvent) -> Result<()> {
+    let result = unsafe {
+        syscall6(
+            EPOLL_CTL,
+            poller as usize,
+            op,
+            fd as usize,
+            event as *mut EpollEvent as usize,
+            0,
+            0,
+        )
+    };
+    decode(result).map(|_| ())
+}
+
+pub fn epoll_add(poller: i32, fd: i32, token: usize, write: bool) -> Result<()> {
+    let events = EPOLLIN | if write { EPOLLOUT } else { 0 } | EPOLLRDHUP;
+    let mut event = EpollEvent::new(events, token);
+    epoll_ctl(poller, EPOLL_CTL_ADD, fd, &mut event)
+}
+
+pub fn epoll_modify(poller: i32, fd: i32, token: usize, write: bool) -> Result<()> {
+    let events = EPOLLIN | if write { EPOLLOUT } else { 0 } | EPOLLRDHUP;
+    let mut event = EpollEvent::new(events, token);
+    epoll_ctl(poller, EPOLL_CTL_MOD, fd, &mut event)
+}
+
+pub fn epoll_delete(poller: i32, fd: i32) -> Result<()> {
+    let mut event = EpollEvent::new(0, 0);
+    epoll_ctl(poller, EPOLL_CTL_DEL, fd, &mut event)
+}
+
+pub fn epoll_wait(
+    poller: i32,
+    events: &mut [super::super::Event],
+    timeout_ms: i32,
+) -> Result<usize> {
+    let mut raw = [EpollEvent { events: 0, data: 0 }; 64];
+    let count = core::cmp::min(events.len(), raw.len());
+    let result = unsafe {
+        syscall6(
+            EPOLL_WAIT,
+            poller as usize,
+            raw.as_mut_ptr() as usize,
+            count,
+            timeout_ms as isize as usize,
+            0,
+            0,
+        )
+    };
+    let ready = decode(result)?;
+    for index in 0..ready {
+        let event = &raw[index];
+        let flags = event.events;
+        let token = event.data as usize;
+        events[index] = super::super::Event {
+            token,
+            readable: flags & (EPOLLIN | EPOLLRDHUP) != 0,
+            writable: flags & EPOLLOUT != 0,
+            error: flags & (EPOLLERR | EPOLLHUP) != 0,
+        };
+    }
+    Ok(ready)
 }
 
 pub fn write_fd(fd: i32, buf: &[u8]) {
