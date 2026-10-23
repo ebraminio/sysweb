@@ -90,12 +90,11 @@ jobs:
         run: |
           set -eu
           mkdir -p dist
-          short="${GITHUB_SHA:0:12}"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
-            asset="sysweb-${short}-${{ matrix.platform }}.exe"
+            asset="sysweb-${{ matrix.platform }}.exe"
             cp "target/${{ matrix.target }}/release/syswebd.exe" "dist/${asset}"
           else
-            asset="sysweb-${short}-${{ matrix.platform }}"
+            asset="sysweb-${{ matrix.platform }}"
             cp "target/${{ matrix.target }}/release/syswebd" "dist/${asset}"
             chmod +x "dist/${asset}"
           fi
@@ -131,7 +130,7 @@ jobs:
           short="${GITHUB_SHA:0:12}"
           tag="build-${short}"
           title="Build ${short}"
-          notes="Automated per-commit build of ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}. Downloads are raw binaries; run chmod +x on Unix and syswebd.exe directly on Windows. See the README for the platform matrix."
+          notes="Automated per-commit build of ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}. Downloads are raw binaries with stable platform names; run chmod +x on Unix. See the README for the platform matrix."
 
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber

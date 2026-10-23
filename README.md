@@ -62,7 +62,6 @@ feature map, and what is deliberately not carried forward (notably `--cmd`).
 | Linux x86_64 | ✅ cross-built locally; CI job | raw syscalls, static ELF | **none** |
 | Linux aarch64 | ✅ cross-built + checked locally; CI check | raw syscalls, static ELF | **none** |
 | macOS arm64 | ✅ tested locally; CI job | libSystem ABI | libSystem imports only; no CRT/std |
-| macOS x86_64 | ❌ not yet | — | — |
 | Windows x86_64 | ✅ CRT-free Win32 async (`WSAPoll`) tested; CI + release artifact | Win32 / shell32 / ws2_32 | **none** |
 
 Linux is the primary target for the libc-free goal. macOS uses the public
@@ -102,6 +101,53 @@ exist, the newest one wins:
 The document root is opened once and all paths are relative to that directory
 fd. Symlink denial therefore applies *beneath* the root, while the root path
 itself may live under a symlinked system directory such as macOS `/var`.
+
+## Install and run
+
+### From source
+
+Cargo has no `cargo run --git`; `cargo install --git` is the closest single
+command. This builds and installs the binary, then runs it:
+
+```sh
+cargo install --git https://github.com/ebraminio/sysweb --bin syswebd --locked && syswebd --root ./public
+```
+
+The download default is all interfaces, port 8080. `cargo install` builds the
+source locally; it does not trust a prebuilt binary.
+
+### Prebuilt binary, one line
+
+Linux x86_64:
+
+```sh
+curl -fsSL -o /tmp/sysweb https://github.com/ebraminio/sysweb/releases/latest/download/sysweb-linux-x86_64 && chmod +x /tmp/sysweb && /tmp/sysweb --root ./public
+```
+
+Linux aarch64: replace `linux-x86_64` with `linux-aarch64`.
+
+macOS arm64:
+
+```sh
+curl -fsSL -o /tmp/sysweb https://github.com/ebraminio/sysweb/releases/latest/download/sysweb-macos-arm64 && chmod +x /tmp/sysweb && /tmp/sysweb --root ./public
+```
+
+Windows PowerShell:
+
+```powershell
+Invoke-WebRequest https://github.com/ebraminio/sysweb/releases/latest/download/sysweb-windows-x86_64.exe -OutFile sysweb.exe; .\sysweb.exe --root .
+```
+
+Or let the wrapper choose the platform:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ebraminio/sysweb/main/scripts/run-latest.sh | sh -s -- --root ./public
+```
+
+The `/releases/latest/download/<name>` URLs are stable because the release
+assets no longer contain the commit hash. These commands run a binary fetched
+from GitHub over TLS; if you do not trust that, use the `cargo install --git`
+command above.
 
 ## Quick start
 
@@ -328,8 +374,8 @@ exact commit:
 
 - tag: `build-<short-sha>`
 - title: `Build <short-sha>`
-- assets: raw binaries named `sysweb-<short-sha>-<platform>`
-- Windows asset: `sysweb-<short-sha>-windows-x86_64.exe`
+- assets: raw binaries with stable names, e.g. `sysweb-linux-x86_64`
+- Windows asset: `sysweb-windows-x86_64.exe`
 
 Supported release targets:
 
@@ -348,11 +394,12 @@ The workflow is [.github/workflows/release.yml](.github/workflows/release.yml).
 To run a downloaded Unix binary:
 
 ```sh
-chmod +x sysweb-<short>-linux-x86_64
-./sysweb-<short>-linux-x86_64 --help
+curl -fsSL -o sysweb https://github.com/ebraminio/sysweb/releases/latest/download/sysweb-linux-x86_64
+chmod +x sysweb
+./sysweb --help
 ```
 
-On Windows, download `sysweb-<short>-windows-x86_64.exe` and run it directly.
+On Windows, download `sysweb-windows-x86_64.exe` and run it directly.
 
 ## How it works
 
