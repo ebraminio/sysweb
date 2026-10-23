@@ -25,6 +25,7 @@ fn main() {
                     "/ENTRY:mainCRTStartup",
                     "/SUBSYSTEM:CONSOLE,6.0",
                     "/MACHINE:X64",
+                    "/STACK:8388608,8388608",
                 ],
                 _ => &[
                     "-nostdlib",

@@ -24,6 +24,13 @@ unsafe extern "system" {
     fn CommandLineToArgvW(command: *const u16, argc: *mut i32) -> *mut *mut u16;
 }
 
+#[cfg(all(target_os = "windows", target_env = "msvc"))]
+#[no_mangle]
+pub extern "C" fn __chkstk() {
+    // The MSVC build commits the full stack (/STACK:8MiB,8MiB), so the guard
+    // pages do not need to be probed for the fixed server frames.
+}
+
 #[cfg(target_os = "windows")]
 #[link(name = "kernel32")]
 unsafe extern "system" {
