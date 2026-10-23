@@ -45,6 +45,18 @@ try {
         }
     }
 
+    try {
+        Invoke-WebRequest -UseBasicParsing -Method Put -Body "escape" `
+            "http://127.0.0.1:$Port/link/escaped.txt" | Out-Null
+        throw "junction write escaped the root"
+    } catch {
+        $code = $_.Exception.Response.StatusCode.value__
+        if ($code -ne 403) { throw "junction write returned $code, expected 403" }
+        if (Test-Path (Join-Path $outside "escaped.txt")) {
+            throw "junction write created an outside file"
+        }
+    }
+
     $jobs = 1..3 | ForEach-Object {
         Start-Job -ScriptBlock {
             param($url)
