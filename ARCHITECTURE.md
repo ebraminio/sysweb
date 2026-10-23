@@ -139,9 +139,9 @@ Design notes:
   with a timer/deadline and remove it if no blocking backend remains.
   Fatal listener errors still terminate; there is no supervisor yet.
 - **Size budget.** Binary size is a design constraint, not an afterthought.
-  CI and the release workflow enforce 120 KiB on macOS arm64, 80 KiB on Linux
-  x86_64, and 76 KiB on Linux aarch64 via `scripts/check-size.sh`; changing a
-  budget is a deliberate change, not a silent regression.
+  CI and the release workflow enforce 120 KiB on macOS arm64 and 84 KiB on
+  Linux x86_64/aarch64 via `scripts/check-size.sh`; changing a budget is a
+  deliberate change, not a silent regression.
 
 ## Linux backend
 

@@ -130,7 +130,7 @@ Enable uploads and folder creation explicitly:
 
 Then:
 
-- open `http://127.0.0.1:8080/files/` and drag files onto the drop zone;
+- open `http://127.0.0.1:8080/files/` and drag files or folders onto the drop zone;
 - or use the terminal:
 
 ```sh
@@ -215,8 +215,9 @@ only when you mean it; this server has no TLS, authentication, or rate limiting.
 - directory index with names, sizes, modification times, types, breadcrumbs,
   sortable columns, and a parent link;
 - a self-contained browser UI with file/folder upload (`webkitdirectory`,
-  preserving relative paths), drag-and-drop file upload, progress, and folder
-  creation, inlined into a fixed 64 KiB buffer;
+  preserving relative paths), recursive drag-and-drop of files or folders,
+  clipboard file and text paste, progress, and folder creation, inlined into a
+  fixed 64 KiB buffer;
 - raw-body `PUT` uploads with `Content-Length`, `Expect: 100-continue`, no
   per-request size cap, exact streaming (no heap), and cleanup of failed
   partial files;
@@ -286,9 +287,9 @@ Current stripped sizes from this workspace:
 | Target | Size | Budget |
 | --- | ---: | ---: |
 | macOS arm64 | 117,664 B | 120 KiB |
-| Linux x86_64 | 76,192 B | 80 KiB |
-| Linux aarch64 | 77,200 B | 76 KiB |
-| Windows x86_64 | 75,776 B | 96 KiB |
+| Linux x86_64 | 84,048 B | 84 KiB |
+| Linux aarch64 | 81,048 B | 84 KiB |
+| Windows x86_64 | 79,872 B | 96 KiB |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
 workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and
@@ -413,8 +414,10 @@ This is a milestone, not a hardened internet-facing server:
 - the Windows backend uses `WSAPoll`, not IOCP yet. Reparse points are rejected
   on open, but broader Windows path-hardening review is still ongoing;
 - folder upload preserves relative paths but relies on the browser's
-  `webkitdirectory`/`webkitRelativePath`; empty directories are not reported by
-  the browser, and dropping a folder is not supported (drop files instead);
+  `webkitdirectory`/`webkitRelativePath` or `webkitGetAsEntry`; empty
+  directories are not reported by the browser. Clipboard folder paste depends
+  on whether the browser exposes directory entries; regular file and text
+  paste is supported. Text paste prompts for a filename;
 - no delete, rename, multi-range responses, `If-Range`, `ETag`,
   `Last-Modified`, or `Date` yet;
 - no CORS, cross-origin isolation, prefix, or inactivity timeout yet;

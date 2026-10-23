@@ -627,6 +627,9 @@ fn multipart_forms_work_for_old_browsers() {
     assert!(!page.contains("var(--"));
     assert!(page.contains("webkitdirectory"));
     assert!(page.contains("webkitRelativePath"));
+    assert!(page.contains("clipboardData"));
+    assert!(page.contains("webkitGetAsEntry"));
+    assert!(page.contains("Drop files or folders"));
     assert!(page.contains("System.Net.WebClient"));
     assert!(page.contains("<span class=\"time\" data-ts="));
     assert!(!page.contains("<time "));

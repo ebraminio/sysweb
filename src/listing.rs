@@ -186,14 +186,41 @@ const JS: &[u8] = br###"
     xhr.send(null);
   }
 
+  function flatItems(files) {
+    var items = [];
+    for (var i = 0; i < files.length; i++) {
+      items.push({ file: files[i], relative: files[i].webkitRelativePath || files[i].name });
+    }
+    return items;
+  }
+
   function uploadAll(files) {
     if (!files || !files.length) return;
+    uploadItems(flatItems(files));
+  }
+
+  function uploadTree(files) {
+    if (!files || !files.length) return;
+    uploadItems(flatItems(files));
+  }
+
+  function uploadItems(items) {
+    if (!items || !items.length) return;
+    var made = {};
     var index = 0;
+    function fail(message) { setStatus(message); }
     function next() {
-      if (index >= files.length) { location.reload(); return; }
-      var file = files[index++];
-      setStatus('Uploading ' + file.name);
-      putFile(file, next, function (message) { setStatus(message); });
+      if (index >= items.length) { location.reload(); return; }
+      var item = items[index++];
+      var parts = splitPath(item.relative);
+      if (!parts.length) { fail('Invalid folder path'); return; }
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i] === '.' || parts[i] === '..') { fail('Invalid folder path'); return; }
+      }
+      ensureDirs(parts, parts.length - 1, made, function () {
+        setStatus('Uploading ' + item.relative);
+        putFileAt(item.file, encodeSegments(parts, parts.length), next, fail);
+      }, fail);
     }
     next();
   }
@@ -235,27 +262,97 @@ const JS: &[u8] = br###"
     next();
   }
 
-  function uploadTree(files) {
-    if (!files || !files.length) return;
-    var made = {};
-    var index = 0;
-    function fail(message) { setStatus(message); }
-    function next() {
-      if (index >= files.length) { location.reload(); return; }
-      var file = files[index++];
-      var relative = file.webkitRelativePath || file.name;
-      var parts = splitPath(relative);
-      if (!parts.length) { fail('Invalid folder path'); return; }
-      for (var i = 0; i < parts.length; i++) {
-        if (parts[i] === '.' || parts[i] === '..') { fail('Invalid folder path'); return; }
-      }
-      var dirCount = parts.length - 1;
-      ensureDirs(parts, dirCount, made, function () {
-        setStatus('Uploading ' + relative);
-        putFileAt(file, encodeSegments(parts, parts.length), next, fail);
-      }, fail);
+  function collectEntry(entry, prefix, out, done) {
+    if (entry.isFile) {
+      entry.file(function (file) {
+        out.push({ file: file, relative: prefix + file.name });
+        done();
+      }, function () { done(); });
+      return;
     }
-    next();
+    if (!entry.isDirectory || !entry.createReader) { done(); return; }
+    var reader = entry.createReader();
+    function readBatch() {
+      try {
+        reader.readEntries(function (batch) {
+          if (!batch.length) { done(); return; }
+          var pending = batch.length;
+          function childDone() { if (--pending === 0) readBatch(); }
+          for (var i = 0; i < batch.length; i++) {
+            collectEntry(batch[i], prefix + entry.name + '/', out, childDone);
+          }
+        }, function () { done(); });
+      } catch (e) { done(); }
+    }
+    readBatch();
+  }
+
+  function collectEntries(entries, done) {
+    var out = [];
+    var pending = entries.length;
+    if (!pending) { done(out); return; }
+    function one() { if (--pending === 0) done(out); }
+    for (var i = 0; i < entries.length; i++) {
+      collectEntry(entries[i], '', out, one);
+    }
+  }
+
+  function itemsFromData(data, done) {
+    var entries = [];
+    var files = [];
+    if (data.items && data.items.length) {
+      for (var i = 0; i < data.items.length; i++) {
+        var item = data.items[i];
+        if (item.kind !== 'file') continue;
+        var entry = null;
+        try { entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null; } catch (e) {}
+        if (entry) entries.push(entry);
+        else {
+          var file = item.getAsFile ? item.getAsFile() : null;
+          if (file) files.push(file);
+        }
+      }
+    }
+    if (entries.length) { collectEntries(entries, done); return true; }
+    if (files.length) { done(flatItems(files)); return true; }
+    if (data.files && data.files.length) { done(flatItems(data.files)); return true; }
+    return false;
+  }
+
+  function putText(text) {
+    var fallback = 'pasted-' + new Date().getTime() + '.txt';
+    var name = prompt('Name for pasted text', fallback);
+    if (!name) return;
+    var slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+    if (slash >= 0) name = name.substring(slash + 1);
+    if (!name) return;
+    var xhr = createXhr();
+    if (!xhr) { setStatus('XMLHttpRequest is not available'); return; }
+    setStatus('Uploading ' + name);
+    try { xhr.open('PUT', path + encodeURIComponent(name)); }
+    catch (e) { setStatus('Cannot start upload'); return; }
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status >= 200 && xhr.status < 300) { location.reload(); return; }
+      var message = '';
+      try { message = xhr.responseText || ''; } catch (e) {}
+      setStatus(name + ': ' + xhr.status + ' ' + message);
+    };
+    try {
+      xhr.setRequestHeader('Content-Type', 'text/plain; charset=utf-8');
+      xhr.send(text);
+    } catch (e) { setStatus(name + ': cannot send text'); }
+  }
+
+  function handleTransfer(data, allowText) {
+    if (!data) return false;
+    if (itemsFromData(data, function (items) { uploadItems(items); })) return true;
+    if (allowText && data.getData) {
+      var text = data.getData('text/plain');
+      if (!text && data.getData('Text')) text = data.getData('Text');
+      if (text) { putText(text); return true; }
+    }
+    return false;
   }
 
   if (canUpload) {
@@ -305,8 +402,15 @@ const JS: &[u8] = br###"
         addEvent(document, 'drop', function (event) {
           if (event.preventDefault) event.preventDefault();
           removeClass(drop, 'over');
-          var transfer = event.dataTransfer;
-          if (transfer) uploadAll(transfer.files);
+          handleTransfer(event.dataTransfer, false);
+        });
+        addEvent(document, 'paste', function (event) {
+          var target = event.target;
+          if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+          var data = event.clipboardData || window.clipboardData;
+          if (handleTransfer(data, true)) {
+            if (event.preventDefault) event.preventDefault();
+          }
         });
       }
 
@@ -430,7 +534,7 @@ pub fn render<P: Platform>(
                 b"<button id=\"mkdir\" class=\"btn\" type=\"button\">New folder</button>",
             )
             || !out.push(b"<span id=\"status\" role=\"status\" aria-live=\"polite\"></span>")
-            || !out.push(b"</div>\n<div id=\"drop\" class=\"js-only\">Drop files to upload</div>\n")
+            || !out.push(b"</div>\n<div id=\"drop\" class=\"js-only\">Drop files or folders here, or paste files/text</div>\n")
         {
             return false;
         }
