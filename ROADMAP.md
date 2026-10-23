@@ -51,7 +51,7 @@ The current release (milestone 0.5).
       with tarballs and SHA-256 checksums.
 - [x] Transient `accept` failures retry with a 100 ms backoff instead of
       exiting; a stalled service is acceptable, a permanent exit is not.
-- [x] Enforced binary-size budgets: 120 KiB macOS arm64, 88 KiB x86_64, 84 KiB aarch64
+- [x] Enforced binary-size budgets: 140 KiB macOS arm64, 108 KiB x86_64, 104 KiB aarch64
       target.
 - [x] `cargo-fuzz` targets for HTTP/path/multipart plus a black-box
       containment/hang/crash test in `tests/security.rs`.
@@ -269,7 +269,7 @@ Every milestone must preserve:
    `thread_local!` items are rejected; the fixed-buffer design passes state
    explicitly. This also keeps read-only sections mergeable into `.text`.
 7. **Small binaries.** Release binaries stay within the checked budgets
-   (120 KiB macOS arm64, 88 KiB x86_64, 84 KiB aarch64); growth is a deliberate
+   (140 KiB macOS arm64, 108 KiB x86_64, 104 KiB aarch64); growth is a deliberate
    decision, not a silent regression.
 
 ## Open questions

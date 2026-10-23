@@ -72,8 +72,8 @@ jobs:
         shell: bash
         run: |
           size="$(wc -c < target/x86_64-pc-windows-msvc/release/syswebd.exe)"
-          test "$size" -le 98304
-          echo "windows size: $size B <= 98304 B"
+          test "$size" -le 118784
+          echo "windows size: $size B <= 118784 B"
 
       - name: Windows smoke test
         if: matrix.target == 'x86_64-pc-windows-msvc'

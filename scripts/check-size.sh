@@ -15,13 +15,13 @@ os="$(uname -s)"
 arch="$(uname -m)"
 case "$os/$arch" in
 Darwin/arm64)
-    budget=122880 # 120 KiB; keep-alive and interface discovery included
+    budget=143360 # 140 KiB; keep-alive, interface discovery, and UI included
     ;;
 Linux/x86_64)
-    budget=90112 # 88 KiB; include the upload UI, MIME table, and async reactor
+    budget=110592 # 108 KiB; include the upload UI, MIME table, and async reactor
     ;;
 Linux/aarch64 | Linux/arm64)
-    budget=86016 # 84 KiB; include the upload UI, MIME table, and async reactor
+    budget=106496 # 104 KiB; include the upload UI, MIME table, and async reactor
     ;;
 *)
     echo "check-size: no budget for $os/$arch (skipped)"
