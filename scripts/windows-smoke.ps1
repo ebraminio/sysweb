@@ -56,7 +56,39 @@ try {
         throw "concurrent GET failed"
     }
 
-    Write-Output "windows smoke: GET/PUT/POST/range/junction/concurrency OK"
+    # Idle deadline: a partial request must be closed.
+    $idlePort = $Port + 1
+    $idleProc = Start-Process -FilePath $Exe `
+        -ArgumentList "--root", $root, "--port", $idlePort, "--idle-timeout", "1", "--quiet" -PassThru
+    Start-Sleep -Milliseconds 700
+    try {
+        $client = [System.Net.Sockets.TcpClient]::new("127.0.0.1", $idlePort)
+        $stream = $client.GetStream()
+        $bytes = [Text.Encoding]::ASCII.GetBytes("GET / HTTP/1.1`r`nHost: x`r`n")
+        $stream.Write($bytes, 0, $bytes.Length)
+        Start-Sleep -Milliseconds 1500
+        $stream.ReadTimeout = 1000
+        $buffer = New-Object byte[] 1
+        $read = $stream.Read($buffer, 0, 1)
+        $client.Close()
+        if ($read -ne 0) { throw "idle connection was not closed" }
+    } finally {
+        Stop-Process -Id $idleProc.Id -Force -ErrorAction SilentlyContinue
+    }
+
+    # Blocking fallback still serves.
+    $blockPort = $Port + 2
+    $blockProc = Start-Process -FilePath $Exe `
+        -ArgumentList "--root", $root, "--port", $blockPort, "--blocking", "--quiet" -PassThru
+    Start-Sleep -Milliseconds 700
+    try {
+        $blocked = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$blockPort/hello.txt"
+        if ($blocked.StatusCode -ne 200) { throw "blocking fallback failed" }
+    } finally {
+        Stop-Process -Id $blockProc.Id -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Output "windows smoke: GET/PUT/POST/range/junction/concurrency/idle/blocking OK"
 } finally {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $root, $outside -ErrorAction SilentlyContinue
