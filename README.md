@@ -331,8 +331,8 @@ Supported release targets:
 | `windows-x86_64` | `windows-latest` | CRT-free PE, MSVC |
 
 Intel macOS is not released yet. Downloads are raw binaries, not archives.
-Releases are marked `--latest=false`, so per-commit builds do not replace a
-future stable latest release.
+Each per-commit release is marked latest, so `/releases/latest` points at the
+newest build.
 
 The workflow is [.github/workflows/release.yml](.github/workflows/release.yml).
 To run a downloaded Unix binary:
