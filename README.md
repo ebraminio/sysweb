@@ -262,7 +262,7 @@ only when you mean it; this server has no TLS, authentication, or rate limiting.
   sortable columns, and a parent link;
 - a self-contained browser UI with file/folder upload (`webkitdirectory`,
   preserving relative paths), recursive drag-and-drop of files or folders,
-  clipboard file and text paste, progress, and folder creation, inlined into a
+  clipboard files (including images) and text paste, progress, and folder creation, inlined into a
   fixed 64 KiB buffer;
 - raw-body `PUT` uploads with `Content-Length`, `Expect: 100-continue`, no
   per-request size cap, exact streaming (no heap), and cleanup of failed
