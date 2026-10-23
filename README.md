@@ -318,8 +318,8 @@ exact commit:
 
 - tag: `build-<short-sha>`
 - title: `Build <short-sha>`
-- assets: `sysweb-<short-sha>-<platform>.tar.gz`
-- checksum: `<asset>.sha256`
+- assets: raw binaries named `sysweb-<short-sha>-<platform>`
+- Windows asset: `sysweb-<short-sha>-windows-x86_64.exe`
 
 Supported release targets:
 
@@ -328,21 +328,21 @@ Supported release targets:
 | `linux-x86_64` | `ubuntu-latest` | static ELF |
 | `linux-aarch64` | `ubuntu-24.04-arm` | static ELF |
 | `macos-arm64` | `macos-latest` | Mach-O, allowlisted libSystem ABI imports |
+| `windows-x86_64` | `windows-latest` | CRT-free PE, MSVC |
 
-Windows and Intel macOS are not released yet because those backends are not
-implemented. Each archive contains `syswebd`, `README.md`, and `LICENSE`.
+Intel macOS is not released yet. Downloads are raw binaries, not archives.
 Releases are marked `--latest=false`, so per-commit builds do not replace a
 future stable latest release.
 
 The workflow is [.github/workflows/release.yml](.github/workflows/release.yml).
-To verify a downloaded artifact:
+To run a downloaded Unix binary:
 
 ```sh
-shasum -a 256 -c sysweb-<short>-linux-x86_64.tar.gz.sha256   # macOS
-sha256sum -c sysweb-<short>-linux-x86_64.tar.gz.sha256       # Linux
-tar -xzf sysweb-<short>-linux-x86_64.tar.gz
-./sysweb-<short>-linux-x86_64/syswebd --help
+chmod +x sysweb-<short>-linux-x86_64
+./sysweb-<short>-linux-x86_64 --help
 ```
+
+On Windows, download `sysweb-<short>-windows-x86_64.exe` and run it directly.
 
 ## How it works
 
