@@ -214,14 +214,16 @@ The `X-Filename` header sometimes used with this pattern is not required:
 sysweb takes the destination from the URL path, or the multipart filename
 when the URL ends in `/`.
 
-The built-in index always contains a plain HTML form
-(`method=post enctype=multipart/form-data`). Modern JavaScript hides it after
-detecting the File API and shows the drag/drop tools; a browser with
-JavaScript disabled, or an old browser without those APIs, keeps the classic
-form and can still upload one file. Classic form posts take the filename from
-the part; a post to `/files/fixed.txt` uses the URL path instead. After a
-successful classic-form post the server returns `303 See Other` to the current
-directory, so the browser reloads the listing/table.
+The built-in index always contains a plain multipart file form plus a plain
+text form (`method=get action="?sysweb-text=1"` with `name` and `text`
+fields). Modern JavaScript hides both after detecting the File API and shows
+the dialog/tools; a browser with JavaScript disabled, or an old browser without
+those APIs, keeps the classic forms. Classic file posts take the filename from
+the part; a post to `/files/fixed.txt` uses the URL path instead. The text form
+needs no XHR or PUT and writes the text as a file. After either classic form
+succeeds the server returns `303 See Other` to the current directory, so the
+browser reloads the listing/table. The text form is limited by the browser's
+GET URL length; the modern dialog has no such limit.
 
 API uploads and folder creation answer `201 Created`; a classic form receives
 the redirect above. The server answers `409 Conflict`
@@ -340,10 +342,10 @@ Current stripped sizes from this workspace:
 
 | Target | Size | Budget |
 | --- | ---: | ---: |
-| macOS arm64 | 117,664 B | 140 KiB |
-| Linux x86_64 | 92,824 B | 108 KiB |
-| Linux aarch64 | 90,144 B | 104 KiB |
-| Windows x86_64 | 88,576 B | 116 KiB |
+| macOS arm64 | 117,680 B | 140 KiB |
+| Linux x86_64 | 95,648 B | 108 KiB |
+| Linux aarch64 | 93,176 B | 104 KiB |
+| Windows x86_64 | 91,136 B | 116 KiB |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
 workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and
@@ -473,9 +475,8 @@ This is a milestone, not a hardened internet-facing server:
   directories are not reported by the browser. Clipboard folder paste depends
   on whether the browser exposes directory entries; regular file and text
   paste is supported. Text paste opens a filename/text dialog and also works
-  from the **Paste text** button on phones. That button is outside the
-  File-API tools, so it also appears in the classic fallback; uploading still
-  needs an XHR/ActiveX request object;
+  from the **Paste text** button on phones. Old browsers without File/XHR use
+  the GET text form instead, which is limited by the browser's URL length;
 - no delete, rename, multi-range responses, `If-Range`, `ETag`,
   `Last-Modified`, or `Date` yet;
 - no CORS, cross-origin isolation, prefix, or inactivity timeout yet;

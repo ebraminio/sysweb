@@ -163,6 +163,15 @@ impl<P: Platform> Server<P> {
             }
         };
 
+        if request
+            .target
+            .windows(b"?sysweb-text=1".len())
+            .any(|window| window == b"?sysweb-text=1")
+        {
+            self.handle_text_form(stream, request, &url_path[..url_len]);
+            return;
+        }
+
         let rel_path = root_relative(&url_path[..url_len]);
         let mut file = match self.platform.open(rel_path) {
             Ok(file) => file,
@@ -313,6 +322,77 @@ impl<P: Platform> Server<P> {
             None,
         ) {
             self.log_request(Method::Get, url_path, Status::Ok, html.len() as u64);
+        }
+    }
+
+    fn handle_text_form(
+        &mut self,
+        stream: &mut P::Stream,
+        request: &http::Request<'_>,
+        url_path: &[u8],
+    ) {
+        let mut name = [0u8; MAX_PATH];
+        let name_len = http::query_value(request.target, b"name", &mut name).unwrap_or(0);
+        let mut text = [0u8; 4096];
+        let text_len = match http::query_value(request.target, b"text", &mut text) {
+            Some(len) => len,
+            None => {
+                self.send_error(stream, Status::UriTooLong, false, b"");
+                return;
+            }
+        };
+        let name = if name_len == 0 {
+            b"pasted.txt".as_slice()
+        } else {
+            &name[..name_len]
+        };
+        let start = name
+            .iter()
+            .rposition(|&byte| byte == b'/' || byte == b'\\')
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let name = &name[start..];
+        if name.is_empty() || name == b"." || name == b".." {
+            self.send_error(stream, Status::BadRequest, false, b"");
+            return;
+        }
+        let rel_path = name;
+        let mut file = match self.platform.create_file(rel_path, self.config.replace()) {
+            Ok(file) => file,
+            Err(Error::AlreadyExists) | Err(Error::IsADirectory) => {
+                self.send_error(stream, Status::Conflict, false, b"");
+                return;
+            }
+            Err(Error::PermissionDenied) => {
+                self.send_error(stream, Status::Forbidden, false, b"");
+                return;
+            }
+            Err(_) => {
+                self.send_error(stream, Status::InternalServerError, false, b"");
+                return;
+            }
+        };
+        if self
+            .platform
+            .write_file(&mut file, &text[..text_len])
+            .is_err()
+        {
+            drop(file);
+            let _ = self.platform.remove_file(rel_path);
+            self.send_error(stream, Status::InternalServerError, false, b"");
+            return;
+        }
+        drop(file);
+        if self.send_body(
+            stream,
+            Status::SeeOther,
+            b"text/plain; charset=utf-8",
+            b"",
+            false,
+            b"",
+            Some(url_path),
+        ) {
+            self.log_request(Method::Get, url_path, Status::SeeOther, 0);
         }
     }
 

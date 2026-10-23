@@ -601,6 +601,25 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
     slot.log_path[..url_len].copy_from_slice(&url_path[..url_len]);
     slot.log_path_len = url_len;
 
+    if method == Method::Get
+        && request
+            .target
+            .windows(b"?sysweb-text=1".len())
+            .any(|window| window == b"?sysweb-text=1")
+    {
+        let mut target = [0u8; REQUEST_BUF];
+        let target_len = request.target.len();
+        target[..target_len].copy_from_slice(request.target);
+        prepare_text_form(
+            platform,
+            config,
+            slot,
+            &url_path[..url_len],
+            &target[..target_len],
+        );
+        return;
+    }
+
     if method == Method::Put {
         prepare_put(
             platform,
@@ -738,6 +757,74 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
         Err(Error::PermissionDenied) => slot.prepare_error(Status::Forbidden, head_only),
         Err(_) => slot.prepare_error(Status::InternalServerError, head_only),
     }
+}
+
+fn prepare_text_form<P: AsyncPlatform>(
+    platform: &mut P,
+    config: &Config,
+    slot: &mut Slot<P>,
+    url_path: &[u8],
+    target: &[u8],
+) {
+    let mut name = [0u8; MAX_PATH];
+    let name_len = http::query_value(target, b"name", &mut name).unwrap_or(0);
+    let mut text = [0u8; 4096];
+    let text_len = match http::query_value(target, b"text", &mut text) {
+        Some(len) => len,
+        None => {
+            slot.prepare_error(Status::UriTooLong, false);
+            return;
+        }
+    };
+    let name = if name_len == 0 {
+        b"pasted.txt".as_slice()
+    } else {
+        &name[..name_len]
+    };
+    let start = name
+        .iter()
+        .rposition(|&byte| byte == b'/' || byte == b'\\')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let name = &name[start..];
+    if name.is_empty() || name == b"." || name == b".." {
+        slot.prepare_error(Status::BadRequest, false);
+        return;
+    }
+    let rel_path = name;
+    let mut file = match platform.create_file(rel_path, config.replace()) {
+        Ok(file) => file,
+        Err(Error::AlreadyExists) | Err(Error::IsADirectory) => {
+            slot.prepare_error(Status::Conflict, false);
+            return;
+        }
+        Err(Error::PermissionDenied) => {
+            slot.prepare_error(Status::Forbidden, false);
+            return;
+        }
+        Err(_) => {
+            slot.prepare_error(Status::InternalServerError, false);
+            return;
+        }
+    };
+    if platform.write_file(&mut file, &text[..text_len]).is_err() {
+        drop(file);
+        let _ = platform.remove_file(rel_path);
+        slot.prepare_error(Status::InternalServerError, false);
+        return;
+    }
+    drop(file);
+    let _ = slot.prepare_response(
+        Status::SeeOther,
+        0,
+        b"text/plain; charset=utf-8",
+        b"",
+        false,
+        Some(url_path),
+        None,
+        false,
+    );
+    slot.log_len = 0;
 }
 
 #[allow(clippy::too_many_arguments)]

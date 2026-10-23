@@ -632,6 +632,11 @@ fn multipart_forms_work_for_old_browsers() {
     assert!(page.contains("id=\"text-dialog\""));
     assert!(page.contains("id=\"text-body\""));
     assert!(page.contains("action=\"?sysweb-form=1\""));
+    assert!(page.contains("id=\"classic-text\""));
+    assert!(page.contains("action=\"?sysweb-text=1\""));
+    assert!(!page.contains("display: flex"));
+    assert!(!page.contains("inline-flex"));
+    assert!(!page.contains("rem;"));
     assert!(page.contains("webkitGetAsEntry"));
     assert!(page.contains("name.split('.')[0] === 'image'"));
     assert!(page.contains("Drop files or folders here, or paste files/images/text"));
@@ -1051,4 +1056,24 @@ fn classic_form_redirect_also_works_in_blocking_mode() {
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 200 OK");
     assert_eq!(body, b"blocking");
+}
+
+#[test]
+fn classic_text_form_uploads_via_get() {
+    for extra in [&["--upload"][..], &["--upload", "--blocking"][..]] {
+        let server = start_server(extra);
+        let response = request(
+            server.port,
+            b"GET /?sysweb-text=1&name=note%20one.txt&text=hello+world HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        );
+        let (head, body) = split(&response);
+        assert_status(&head, "HTTP/1.1 303 See Other");
+        assert_eq!(header(&head, "Location"), Some("/"));
+        assert!(body.is_empty());
+
+        let response = get(server.port, "/note%20one.txt");
+        let (head, body) = split(&response);
+        assert_status(&head, "HTTP/1.1 200 OK");
+        assert_eq!(body, b"hello world");
+    }
 }

@@ -191,6 +191,69 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
     })
 }
 
+/// Decode one query-string field. `+` means space; `%XX` is decoded once.
+/// Returns `None` for malformed escapes or a value that does not fit `out`.
+pub fn query_value(target: &[u8], key: &[u8], out: &mut [u8]) -> Option<usize> {
+    let query = &target[target.iter().position(|&byte| byte == b'?')? + 1..];
+    let mut start = 0usize;
+    while start <= query.len() {
+        let end = query[start..]
+            .iter()
+            .position(|&byte| byte == b'&')
+            .map(|offset| start + offset)
+            .unwrap_or(query.len());
+        let field = &query[start..end];
+        if let Some(equals) = field.iter().position(|&byte| byte == b'=') {
+            if &field[..equals] == key {
+                return decode_query(&field[equals + 1..], out);
+            }
+        }
+        if end == query.len() {
+            break;
+        }
+        start = end + 1;
+    }
+    None
+}
+
+fn decode_query(value: &[u8], out: &mut [u8]) -> Option<usize> {
+    let mut len = 0usize;
+    let mut index = 0usize;
+    while index < value.len() {
+        let byte = if value[index] == b'+' {
+            index += 1;
+            b' '
+        } else if value[index] == b'%' {
+            if index + 2 >= value.len() {
+                return None;
+            }
+            let hi = hex_digit(value[index + 1])?;
+            let lo = hex_digit(value[index + 2])?;
+            index += 3;
+            (hi << 4) | lo
+        } else {
+            let byte = value[index];
+            index += 1;
+            byte
+        };
+        if len == out.len() {
+            return None;
+        }
+        out[len] = byte;
+        len += 1;
+    }
+    Some(len)
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn parse_range(value: &[u8]) -> Option<RangeSpec> {
     let value = trim(value);
     if value.len() < 6 || !value[..6].eq_ignore_ascii_case(b"bytes=") {
@@ -344,7 +407,9 @@ impl Status {
 
 #[cfg(test)]
 mod tests {
-    use super::{header_end, parse, Connection, Method, ParseError, RangeSpec, Status, Version};
+    use super::{
+        header_end, parse, query_value, Connection, Method, ParseError, RangeSpec, Status, Version,
+    };
 
     #[test]
     fn finds_header_end() {
@@ -367,6 +432,18 @@ mod tests {
         let r = parse(b"HEAD / HTTP/1.0\r\n\r\n").unwrap();
         assert_eq!(r.method, Method::Head);
         assert_eq!(r.version, Version::Http10);
+    }
+
+    #[test]
+    fn parses_query_fields() {
+        let mut out = [0u8; 32];
+        let target = b"/dir/?sysweb-text=1&name=note%20one.txt&text=hello+world";
+        assert_eq!(query_value(target, b"name", &mut out), Some(12));
+        assert_eq!(&out[..12], b"note one.txt");
+        assert_eq!(query_value(target, b"text", &mut out), Some(11));
+        assert_eq!(&out[..11], b"hello world");
+        assert_eq!(query_value(target, b"missing", &mut out), None);
+        assert_eq!(query_value(b"/", b"name", &mut out), None);
     }
 
     #[test]

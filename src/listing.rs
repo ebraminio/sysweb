@@ -20,38 +20,38 @@ body {
 }
 body, .here, .crumb a, td.name a { color: #17191d; }
 a, .brand, .note code, footer a, tr.parent td.name a { color: #0b63b6; }
-main { max-width: 78rem; margin: 0 auto; padding: 1.1rem 1.2rem 3rem; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px 16px 48px; }
 header {
-  display: flex; align-items: baseline; gap: .85rem; flex-wrap: wrap;
-  max-width: 78rem; margin: 0 auto; padding: 1rem 1.2rem 0;
+  max-width: 1100px; margin: 0 auto; padding: 14px 16px 0;
 }
-.brand { font-weight: 700; text-decoration: none; letter-spacing: .02em; }
-.crumb { overflow-wrap: anywhere; word-wrap: break-word; }
+.brand { display: inline-block; font-weight: 700; text-decoration: none; letter-spacing: .02em; margin-right: .85em; }
+.crumb { display: inline; overflow-wrap: anywhere; word-wrap: break-word; }
 .crumb a { text-decoration: none; }
 .crumb a:hover { color: #0b63b6; text-decoration: underline; }
-.sep { padding: 0 .1rem; }
-h1 { font-size: 1.05rem; font-weight: 600; margin: .2rem 0 1rem; overflow-wrap: anywhere; word-wrap: break-word; }
+.sep { padding: 0 .1em; }
+h1 { font-size: 15px; font-weight: 600; margin: .2em 0 1em; overflow-wrap: anywhere; word-wrap: break-word; }
 h1 .path { font-weight: 400; }
-.tools { display: flex; gap: .55rem; flex-wrap: wrap; align-items: center; margin: 0 0 .9rem; }
+.tools { margin: 0 0 .9em; }
+.tools .btn, .tools label, .tools #status, .tools textarea { margin: 0 .55em .55em 0; }
 .btn {
-  display: inline-flex; align-items: center; gap: .4rem; cursor: pointer;
+  display: inline-block; vertical-align: middle; cursor: pointer;
   border: 1px solid #d9dde4; background: #ffffff; color: #17191d;
-  border-radius: .45rem; padding: .42rem .7rem; font: inherit;
+  border-radius: 6px; padding: 6px 10px; font: inherit;
 }
 .btn:hover { background: #eef3f9; border-color: #0b63b6; }
 .btn.primary { border-color: #0b63b6; color: #0b63b6; }
-.btn input[type=file] { max-width: 13rem; font: inherit; color: #5f6672; }
-#status { overflow-wrap: anywhere; word-wrap: break-word; }
+.btn input[type=file] { max-width: 180px; font: inherit; color: #5f6672; margin-left: .4em; }
+#status { display: inline-block; vertical-align: middle; overflow-wrap: anywhere; word-wrap: break-word; }
 #status:empty { display: none; }
 #drop {
-  display: none; border: 1px dashed #d9dde4; border-radius: .55rem;
-  padding: .9rem 1rem; margin: 0 0 1rem; color: #5f6672; text-align: center;
+  display: none; border: 1px dashed #d9dde4; border-radius: 8px;
+  padding: 13px 16px; margin: 0 0 1em; color: #5f6672; text-align: center;
 }
 #drop.over { border-color: #0b63b6; background: #eef3f9; color: #0b63b6; }
 .js-only { display: none; }
-.note { margin: 0 0 1rem; }
-table { width: 100%; border-collapse: collapse; background: #ffffff; border: 1px solid #d9dde4; border-radius: .55rem; overflow: hidden; }
-th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid #d9dde4; vertical-align: top; }
+.note { margin: 0 0 1em; }
+table { width: 100%; border-collapse: collapse; background: #ffffff; border: 1px solid #d9dde4; border-radius: 8px; overflow: hidden; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #d9dde4; vertical-align: top; }
 tr:last-child td { border-bottom: 0; }
 th { font-weight: 500; white-space: nowrap; }
 th button { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; }
@@ -63,33 +63,39 @@ td.name a:hover { color: #0b63b6; text-decoration: underline; }
 td.size, td.type { white-space: nowrap; }
 td.size { text-align: right; font-variant-numeric: tabular-nums; }
 td.modified { white-space: nowrap; }
-tr.empty td { text-align: center; padding: 1.4rem; }
-footer { margin-top: 1.4rem; font-size: .92em; padding: 0 1.2rem; }
-details { margin-top: 1rem; padding: 0 1.2rem; }
+tr.empty td { text-align: center; padding: 20px; }
+footer { margin-top: 20px; font-size: .92em; padding: 0 16px; }
+details { margin-top: 1em; padding: 0 16px; }
 summary { cursor: pointer; }
-pre { background: #ffffff; border: 1px solid #d9dde4; border-radius: .45rem; padding: .7rem .8rem; overflow-x: auto; }
+pre { background: #ffffff; border: 1px solid #d9dde4; border-radius: 6px; padding: 10px 12px; overflow-x: auto; }
 .crumb, .sep, #status, .note, th, td.size, td.type, td.modified, tr.empty td, footer, summary, h1 .path, td.name .symlink { color: #5f6672; }
 #text-dialog {
-  position: fixed; inset: 0; z-index: 20; display: none;
-  background: rgba(23, 25, 29, .48); padding: 1rem;
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 20; display: none;
+  background: #555555; background: rgba(23, 25, 29, .48); padding: 16px;
 }
 .dialog-panel {
-  max-width: 38rem; margin: 2rem auto; background: #ffffff;
-  border: 1px solid #d9dde4; border-radius: .55rem; padding: 1rem;
+  max-width: 600px; margin: 28px auto; background: #ffffff;
+  border: 1px solid #d9dde4; border-radius: 8px; padding: 16px;
 }
-.dialog-panel h2 { font-size: 1rem; margin: 0 0 .7rem; }
-.dialog-panel label { display: block; margin: 0 0 .6rem; color: #5f6672; }
+.dialog-panel h2 { font-size: 14px; margin: 0 0 .7em; }
+.dialog-panel label { display: block; margin: 0 0 .6em; color: #5f6672; }
+#classic-text textarea { display: block; margin-top: .45em; }
+#classic-text textarea {
+  width: 100%; min-height: 56px; resize: vertical; font: inherit;
+  border: 1px solid #d9dde4; border-radius: 6px; padding: 6px 8px;
+}
 #text-name { width: 100%; }
 #text-body {
-  width: 100%; min-height: 10rem; resize: vertical; font: inherit;
-  border: 1px solid #d9dde4; border-radius: .45rem; padding: .55rem .65rem;
+  width: 100%; min-height: 140px; resize: vertical; font: inherit;
+  border: 1px solid #d9dde4; border-radius: 6px; padding: 8px 10px;
   background: #ffffff; color: #17191d;
 }
-.dialog-actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .8rem; }
+.dialog-actions { text-align: right; margin-top: .8em; }
+.dialog-actions .btn { margin-left: .5em; }
 @media (max-width: 760px) {
   th:nth-child(2), td:nth-child(2), th:nth-child(4), td:nth-child(4) { display: none; }
-  th, td { padding: .45rem .5rem; }
-  .btn input[type=file] { max-width: 9rem; }
+  th, td { padding: 6px 7px; }
+  .btn input[type=file] { max-width: 130px; }
 }
 @media (prefers-color-scheme: dark) {
   body { background: #101216; }
@@ -479,6 +485,8 @@ const JS: &[u8] = br###"
 
       var classic = byId('classic-upload');
       if (classic) classic.style.display = 'none';
+      var classicText = byId('classic-text');
+      if (classicText) classicText.style.display = 'none';
     }
   }
 
@@ -596,15 +604,19 @@ pub fn render<P: Platform>(
             || !out.push(b"<label class=\"btn primary\">Upload (form)<input type=\"file\" name=\"file\"></label>")
             || !out.push(b"<button class=\"btn\" type=\"submit\">Upload</button>")
             || !out.push(b"</form>\n")
-            || !out.push(
-                b"<div class=\"tools\"><button id=\"paste-text\" class=\"btn\" type=\"button\" onclick=\"syswebShowText()\">Paste text</button></div>\n",
-            )
+            || !out.push(b"<form id=\"classic-text\" class=\"tools\" method=\"get\" action=\"?sysweb-text=1\">")
+            || !out.push(b"<label>Text file <input name=\"name\" type=\"text\" value=\"pasted.txt\"></label>")
+            || !out.push(b"<textarea name=\"text\" rows=\"4\" placeholder=\"Paste or type text\"></textarea>")
+            || !out.push(b"<button class=\"btn\" type=\"submit\">Upload text</button></form>\n")
             || !out.push(b"<div id=\"js-tools\" class=\"tools js-only\">")
             || !out.push(
                 b"<label class=\"btn primary\">Upload<input id=\"file\" type=\"file\" multiple></label>",
             )
             || !out.push(
                 b"<label id=\"folder-label\" class=\"btn\">Upload folder<input id=\"folder\" type=\"file\" webkitdirectory multiple></label>",
+            )
+            || !out.push(
+                b"<button id=\"paste-text\" class=\"btn\" type=\"button\" onclick=\"syswebShowText()\">Paste text</button>",
             )
             || !out.push(
                 b"<button id=\"mkdir\" class=\"btn\" type=\"button\">New folder</button>",
