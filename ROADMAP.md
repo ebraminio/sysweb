@@ -189,17 +189,16 @@ lands against the async `Reactor` trait.
 - [x] IOCP completion spike: `CreateIoCompletionPort`, overlapped `AcceptEx`,
       and overlapped `WSARecv`/`WSASend` over loopback; only
       `KERNEL32.dll`/`WS2_32.dll`.
-- [ ] Provide any remaining `mem*` shims for the full MSVC target (the spike
-      needs none).
-- [ ] Link `kernel32`/`ws2_32` explicitly; document the exact MSVC/link.exe
-      recipe and the LLVM/lld alternative.
-- [ ] `WSAStartup`, `socket`, `bind`, `listen`, `accept`, `recv`, `send`.
-- [ ] File I/O with `CreateFileA`, `GetFileSizeEx`, `ReadFile`, `CloseHandle`.
+- [x] Provide the `mem*` shims for the full MSVC target.
+- [x] Link `kernel32`/`ws2_32`/`shell32` explicitly; document the MSVC and
+      LLVM/lld alternatives.
+- [x] `WSAStartup`, `socket`, `bind`, `listen`, `accept`, `recv`, `send`.
+- [x] File I/O with `CreateFileW`, `GetFileInformationByHandle`, `ReadFile`, `CloseHandle`.
 - [ ] IOCP directly: `CreateIoCompletionPort`,
       `GetQueuedCompletionStatusEx`, `AcceptEx`, `WSARecv`, `WSASend`,
       `CancelIoEx`. No `WSAPoll`/`select` fallback.
 - [ ] File I/O with `CreateFile2`/`GetFileSizeEx`/`ReadFile`.
-- [ ] CI job on `windows-latest`; `dumpbin /dependents` proves no CRT DLLs and
+- [x] CI job on `windows-latest`; `dumpbin /dependents` proves no CRT DLLs and
       `dumpbin /imports` lists only the intended Win32 DLLs.
 - [ ] E2E test on Windows.
 

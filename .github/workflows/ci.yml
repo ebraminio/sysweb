@@ -73,6 +73,10 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
+      - name: Inspect Windows imports
+        shell: pwsh
+        run: ./scripts/check-windows-imports.ps1 -Exe target/release/syswebd.exe
+
       - name: Smoke test
         shell: pwsh
         run: ./scripts/windows-smoke.ps1 -Exe target/release/syswebd.exe

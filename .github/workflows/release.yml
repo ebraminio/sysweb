@@ -80,6 +80,11 @@ jobs:
         shell: pwsh
         run: ./scripts/windows-smoke.ps1 -Exe target/x86_64-pc-windows-msvc/release/syswebd.exe
 
+      - name: Inspect Windows imports
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: ./scripts/check-windows-imports.ps1 -Exe target/x86_64-pc-windows-msvc/release/syswebd.exe
+
       - name: Package raw binary
         shell: bash
         run: |
