@@ -64,7 +64,7 @@ feature map, and what is deliberately not carried forward (notably `--cmd`).
 | Linux aarch64 | ✅ cross-built + checked locally; CI check | raw syscalls, static ELF | **none** |
 | macOS arm64 | ✅ tested locally; CI job | libSystem ABI | libSystem imports only; no CRT/std |
 | macOS x86_64 | ❌ not yet | — | — |
-| Windows x86_64 | 🧪 CRT-free Win32 blocking backend tested; IOCP reactor next | Win32 / shell32 / ws2_32 | **none** |
+| Windows x86_64 | ✅ CRT-free Win32 async (`WSAPoll`) tested; IOCP next | Win32 / shell32 / ws2_32 | **none** |
 
 Linux is the primary target for the libc-free goal. macOS uses the public
 libSystem ABI: Apple does not promise stability for raw syscall numbers or
@@ -72,11 +72,10 @@ kernel `struct stat` layouts, and ld64 requires `libSystem` anyway. The release
 binary imports only the functions in the allowlist checked by
 `scripts/check-binary.sh`.
 
-A CRT-free Win32 blocking backend is now wired in and runs on Windows 11:
-GET, ranges, PUT, multipart POST, and directory listings work. It imports only
-`KERNEL32.dll`, `SHELL32.dll`, and `WS2_32.dll`. The async IOCP reactor is the
-next Windows step; the current Windows path is deliberately blocking and is not
-the final async backend.
+A CRT-free Win32 backend runs on Windows 11 with the same async state machine:
+GET, ranges, PUT, multipart POST, and directory listings work. Socket readiness
+currently uses `WSAPoll`; IOCP is the next Windows step. The backend imports
+only `KERNEL32.dll`, `SHELL32.dll`, and `WS2_32.dll`.
 
 Two supporting spikes are also validated:
 
@@ -280,7 +279,7 @@ Current stripped sizes from this workspace:
 | macOS arm64 | 101,008 B | 112 KiB |
 | Linux x86_64 | 76,192 B | 80 KiB |
 | Linux aarch64 | 74,384 B | 76 KiB |
-| Windows x86_64 | 56,320 B | no CI budget yet |
+| Windows x86_64 | 72,704 B | no CI budget yet |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
 workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and
@@ -401,8 +400,8 @@ This is a milestone, not a hardened internet-facing server:
   There are no CSS custom properties. Layout is basic in engines without
   flexbox. JS uploads still need `File`/XHR, otherwise the classic form is the
   fallback;
-- the Windows backend is currently blocking; its symlink/path hardening is
-  still under review, so do not expose an untrusted tree with it yet;
+- the Windows backend uses `WSAPoll`, not IOCP yet; its symlink/path hardening
+  is still under review, so do not expose an untrusted tree with it yet;
 - folder upload preserves relative paths but relies on the browser's
   `webkitdirectory`/`webkitRelativePath`; empty directories are not reported by
   the browser, and dropping a folder is not supported (drop files instead);

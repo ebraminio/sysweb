@@ -95,7 +95,7 @@ impl Config {
         let mut replace = false;
         let mut index = true;
         let mut port_explicit = false;
-        let mut async_mode = cfg!(not(windows));
+        let mut async_mode = true;
         let mut idle_seconds = 30u16;
 
         let mut i = 1usize; // skip argv[0]

@@ -60,8 +60,11 @@ pub fn run(args: &[&[u8]]) -> ! {
             }
             #[cfg(windows)]
             {
-                let _ = async_mode;
-                server.run()
+                if async_mode {
+                    server.run_async()
+                } else {
+                    server.run()
+                }
             }
         }
         Err(error) => {

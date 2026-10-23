@@ -178,8 +178,8 @@ replacement and Windows IOCP remain.
 
 ## M3 — Windows CRT-free backend 🗺️
 
-**Ordering:** after M2. A CRT-free blocking Win32 backend now exists for
-bring-up; the final backend is IOCP, not a blocking
+**Ordering:** after M2. A CRT-free Win32 async backend using `WSAPoll` now
+exists; the final backend is IOCP, not a blocking
 implementation that would be rewritten by the reactor. The no-CRT
 link/entry-point spike is done in `spikes/windows-no-crt`; the real backend
 lands against the async `Reactor` trait.

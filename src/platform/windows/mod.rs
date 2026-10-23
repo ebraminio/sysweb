@@ -2,7 +2,10 @@
 
 #![allow(non_snake_case)]
 
-use crate::platform::{DirEntry, EntryKind, Error, FileInfo, Platform, Result, SocketAddr};
+use crate::platform::{
+    AsyncPlatform, DirEntry, EntryKind, Error, Event, FileInfo, Interest, Platform, Result,
+    SocketAddr,
+};
 use core::ffi::c_void;
 use core::ptr::null_mut;
 
@@ -42,6 +45,14 @@ const WSAECONNABORTED: i32 = 10053;
 const WSAENOTSOCK: i32 = 10038;
 const CP_UTF8: u32 = 65001;
 const STDERR_HANDLE: u32 = -12i32 as u32;
+const FIONBIO: i32 = 0x8004667eu32 as i32;
+const POLLRDNORM: i16 = 0x0100;
+const POLLWRNORM: i16 = 0x0010;
+const POLLERR: i16 = 0x0001;
+const POLLHUP: i16 = 0x0002;
+const POLLNVAL: i16 = 0x0004;
+const MAX_POLL: usize = 64;
+const SEND_BUF: usize = 16 * 1024;
 
 #[repr(C)]
 struct WsaData([u8; 512]);
@@ -179,6 +190,47 @@ unsafe extern "system" {
     fn send(s: usize, buffer: *const u8, len: i32, flags: i32) -> i32;
     fn closesocket(s: usize) -> i32;
     fn setsockopt(s: usize, level: i32, name: i32, value: *const u8, len: i32) -> i32;
+    fn ioctlsocket(s: usize, cmd: i32, value: *mut u32) -> i32;
+    fn WSAPoll(fds: *mut WsaPollFd, count: u32, timeout: i32) -> i32;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct WsaPollFd {
+    fd: usize,
+    events: i16,
+    revents: i16,
+}
+
+#[derive(Clone, Copy)]
+struct PollFd {
+    fd: usize,
+    token: usize,
+    events: i16,
+    active: bool,
+}
+
+impl PollFd {
+    const fn empty() -> Self {
+        Self {
+            fd: usize::MAX,
+            token: 0,
+            events: 0,
+            active: false,
+        }
+    }
+}
+
+pub struct Poller {
+    fds: [PollFd; MAX_POLL],
+}
+
+impl Poller {
+    fn new() -> Self {
+        Self {
+            fds: [PollFd::empty(); MAX_POLL],
+        }
+    }
 }
 
 pub struct Sys {
@@ -189,7 +241,31 @@ pub struct Sys {
 
 pub struct Listener(usize);
 pub struct Stream(usize);
-pub struct File(*mut c_void);
+pub struct File {
+    handle: *mut c_void,
+    buffer: [u8; SEND_BUF],
+    buffer_offset: u64,
+    buffer_pos: usize,
+    buffer_len: usize,
+}
+
+impl File {
+    fn new(handle: *mut c_void) -> Self {
+        Self {
+            handle,
+            buffer: [0; SEND_BUF],
+            buffer_offset: 0,
+            buffer_pos: 0,
+            buffer_len: 0,
+        }
+    }
+
+    fn clear_buffer(&mut self) {
+        self.buffer_len = 0;
+        self.buffer_pos = 0;
+        self.buffer_offset = 0;
+    }
+}
 pub struct Dir {
     handle: *mut c_void,
     data: Win32FindDataW,
@@ -208,7 +284,7 @@ impl Drop for Stream {
 }
 impl Drop for File {
     fn drop(&mut self) {
-        unsafe { CloseHandle(self.0) };
+        unsafe { CloseHandle(self.handle) };
     }
 }
 impl Drop for Dir {
@@ -484,18 +560,18 @@ impl Platform for Sys {
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
         )?;
         let _info = Self::info_for(handle)?;
-        Ok(File(handle))
+        Ok(File::new(handle))
     }
 
     fn file_info(&mut self, file: &Self::File) -> Result<FileInfo> {
-        Self::info_for(file.0)
+        Self::info_for(file.handle)
     }
 
     fn read_file(&mut self, file: &mut Self::File, buf: &mut [u8]) -> Result<usize> {
         let mut read = 0u32;
         if unsafe {
             ReadFile(
-                file.0,
+                file.handle,
                 buf.as_mut_ptr() as *mut c_void,
                 buf.len() as u32,
                 &mut read,
@@ -516,7 +592,7 @@ impl Platform for Sys {
         len: u64,
     ) -> Result<u64> {
         let mut position = offset as i64;
-        if unsafe { SetFilePointerEx(file.0, position, &mut position, 0) } == 0 {
+        if unsafe { SetFilePointerEx(file.handle, position, &mut position, 0) } == 0 {
             return Err(Self::last_error());
         }
         let mut remaining = len;
@@ -526,7 +602,7 @@ impl Platform for Sys {
             let mut read = 0u32;
             if unsafe {
                 ReadFile(
-                    file.0,
+                    file.handle,
                     buffer.as_mut_ptr() as *mut c_void,
                     want as u32,
                     &mut read,
@@ -619,14 +695,14 @@ impl Platform for Sys {
     fn create_file(&mut self, path: &[u8], replace: bool) -> Result<Self::File> {
         let creation = if replace { CREATE_ALWAYS } else { CREATE_NEW };
         let handle = self.open_handle(path, GENERIC_WRITE, creation, FILE_ATTRIBUTE_NORMAL)?;
-        Ok(File(handle))
+        Ok(File::new(handle))
     }
 
     fn write_file(&mut self, file: &mut Self::File, buf: &[u8]) -> Result<()> {
         let mut written = 0u32;
         if unsafe {
             WriteFile(
-                file.0,
+                file.handle,
                 buf.as_ptr() as *const c_void,
                 buf.len() as u32,
                 &mut written,
@@ -680,6 +756,252 @@ impl Platform for Sys {
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetStdHandle(which: u32) -> *mut c_void;
+}
+
+impl AsyncPlatform for Sys {
+    type Poller = Poller;
+
+    fn poller(&mut self) -> Result<Self::Poller> {
+        Ok(Poller::new())
+    }
+
+    fn register_listener(
+        &mut self,
+        poller: &mut Self::Poller,
+        listener: &Self::Listener,
+        token: usize,
+    ) -> Result<()> {
+        poller_register(poller, listener.0, token, false)
+    }
+
+    fn register_stream(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        token: usize,
+    ) -> Result<()> {
+        poller_register(poller, stream.0, token, false)
+    }
+
+    fn set_interest(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        token: usize,
+        interest: Interest,
+    ) -> Result<()> {
+        if let Some(entry) = poller
+            .fds
+            .iter_mut()
+            .find(|entry| entry.active && entry.fd == stream.0 && entry.token == token)
+        {
+            entry.events = if interest == Interest::Writable {
+                POLLWRNORM
+            } else {
+                POLLRDNORM
+            };
+            Ok(())
+        } else {
+            Err(Error::InvalidInput)
+        }
+    }
+
+    fn deregister_stream(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        token: usize,
+    ) -> Result<()> {
+        if let Some(entry) = poller
+            .fds
+            .iter_mut()
+            .find(|entry| entry.active && entry.fd == stream.0 && entry.token == token)
+        {
+            entry.active = false;
+        }
+        Ok(())
+    }
+
+    fn wait(
+        &mut self,
+        poller: &mut Self::Poller,
+        events: &mut [Event],
+        timeout_ms: i32,
+    ) -> Result<usize> {
+        let mut raw = [WsaPollFd {
+            fd: usize::MAX,
+            events: 0,
+            revents: 0,
+        }; MAX_POLL];
+        let mut active = 0usize;
+        for entry in &poller.fds {
+            if !entry.active {
+                continue;
+            }
+            raw[active] = WsaPollFd {
+                fd: entry.fd,
+                events: entry.events,
+                revents: 0,
+            };
+            active += 1;
+        }
+        if active == 0 {
+            return Ok(0);
+        }
+        let result = unsafe { WSAPoll(raw.as_mut_ptr(), active as u32, timeout_ms) };
+        if result == SOCKET_ERROR {
+            return Err(Self::last_wsa());
+        }
+        let mut count = 0usize;
+        for index in 0..active {
+            let revents = raw[index].revents;
+            if revents == 0 {
+                continue;
+            }
+            let fd = raw[index].fd;
+            let Some(entry) = poller
+                .fds
+                .iter()
+                .find(|entry| entry.active && entry.fd == fd)
+            else {
+                continue;
+            };
+            if count == events.len() {
+                break;
+            }
+            events[count] = Event {
+                token: entry.token,
+                readable: revents & (POLLRDNORM | POLLHUP | POLLERR | POLLNVAL) != 0,
+                writable: revents & POLLWRNORM != 0,
+                error: revents & (POLLERR | POLLNVAL) != 0,
+            };
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    fn set_listener_nonblocking(&mut self, listener: &Self::Listener) -> Result<()> {
+        set_nonblocking(listener.0)
+    }
+
+    fn accept_nonblocking(&mut self, listener: &Self::Listener) -> Result<Self::Stream> {
+        loop {
+            let fd = unsafe { accept(listener.0, null_mut(), null_mut()) };
+            if fd != INVALID_SOCKET {
+                set_nonblocking(fd)?;
+                return Ok(Stream(fd));
+            }
+            match Self::last_wsa() {
+                Error::Interrupted => continue,
+                error => return Err(error),
+            }
+        }
+    }
+
+    fn read_nonblocking(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize> {
+        loop {
+            let count = unsafe { recv(stream.0, buf.as_mut_ptr(), buf.len() as i32, 0) };
+            if count >= 0 {
+                return Ok(count as usize);
+            }
+            match Self::last_wsa() {
+                Error::Interrupted => continue,
+                error => return Err(error),
+            }
+        }
+    }
+
+    fn write_nonblocking(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<usize> {
+        loop {
+            let count = unsafe { send(stream.0, buf.as_ptr(), buf.len() as i32, 0) };
+            if count >= 0 {
+                return Ok(count as usize);
+            }
+            match Self::last_wsa() {
+                Error::Interrupted => continue,
+                error => return Err(error),
+            }
+        }
+    }
+
+    fn send_file_nonblocking(
+        &mut self,
+        stream: &mut Self::Stream,
+        file: &mut Self::File,
+        offset: u64,
+        len: u64,
+    ) -> Result<u64> {
+        if file.buffer_len > 0 && offset != file.buffer_offset + file.buffer_pos as u64 {
+            file.clear_buffer();
+        }
+        if file.buffer_len == 0 {
+            let mut position = offset as i64;
+            if unsafe { SetFilePointerEx(file.handle, position, &mut position, 0) } == 0 {
+                return Err(Self::last_error());
+            }
+            let mut read = 0u32;
+            let want = core::cmp::min(len, SEND_BUF as u64) as u32;
+            if unsafe {
+                ReadFile(
+                    file.handle,
+                    file.buffer.as_mut_ptr() as *mut c_void,
+                    want,
+                    &mut read,
+                    null_mut(),
+                )
+            } == 0
+                || read == 0
+            {
+                return Ok(0);
+            }
+            file.buffer_len = read as usize;
+            file.buffer_pos = 0;
+            file.buffer_offset = offset;
+        }
+        let sent = unsafe {
+            send(
+                stream.0,
+                file.buffer[file.buffer_pos..file.buffer_len].as_ptr(),
+                (file.buffer_len - file.buffer_pos) as i32,
+                0,
+            )
+        };
+        if sent > 0 {
+            file.buffer_pos += sent as usize;
+            if file.buffer_pos == file.buffer_len {
+                file.clear_buffer();
+            }
+            return Ok(sent as u64);
+        }
+        match Self::last_wsa() {
+            Error::WouldBlock | Error::Interrupted => Err(Self::last_wsa()),
+            error => Err(error),
+        }
+    }
+}
+
+fn set_nonblocking(fd: usize) -> Result<()> {
+    let mut one: u32 = 1;
+    if unsafe { ioctlsocket(fd, FIONBIO, &mut one) } == SOCKET_ERROR {
+        Err(Sys::last_wsa())
+    } else {
+        Ok(())
+    }
+}
+
+fn poller_register(poller: &mut Poller, fd: usize, token: usize, write: bool) -> Result<()> {
+    let index = poller
+        .fds
+        .iter()
+        .position(|entry| !entry.active || (entry.fd == fd && entry.token == token))
+        .ok_or(Error::TooManyOpenFiles)?;
+    poller.fds[index] = PollFd {
+        fd,
+        token,
+        events: if write { POLLWRNORM } else { POLLRDNORM },
+        active: true,
+    };
+    Ok(())
 }
 
 pub fn write_stdout(message: &[u8]) {

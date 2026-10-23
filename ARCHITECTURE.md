@@ -571,7 +571,7 @@ struct Connection {
 }
 ```
 
-A fixed array of `MAX_CONNECTIONS` slots (currently 8) is allocated once
+A fixed array of `MAX_CONNECTIONS` slots (8 on Unix, 4 on Windows to fit the default stack) is allocated once
 in the server's stack or a static. Each event carries a slot token. There is no
 per-connection heap allocation and no unbounded queue. Idle/read/write timeouts
 come from the reactor wait timeout plus a per-slot deadline.
