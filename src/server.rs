@@ -7,7 +7,7 @@ use crate::listing::{self, LISTING_BUF};
 use crate::mime;
 use crate::multipart::{self, Sink, SinkError};
 use crate::path::{self, MAX_PATH, MAX_URL_PATH};
-use crate::platform::{AsyncPlatform, Error, FileInfo, Platform, SocketAddr};
+use crate::platform::{AsyncPlatform, Error, FileInfo, Interface, Platform, SocketAddr};
 
 pub(crate) const REQUEST_BUF: usize = 8192;
 const FILE_BUF: usize = 16 * 1024;
@@ -869,19 +869,13 @@ impl<P: Platform> Server<P> {
     }
 
     fn log_startup(&mut self, addr: SocketAddr) {
-        let mut line = FixedBuf::<LOG_BUF>::new();
-        let _ = line.push(b"syswebd ");
-        let _ = line.push(crate::VERSION.as_bytes());
-        let _ = line.push(b" listening on http://");
-        let _ = line.push_ipv4(addr.ip);
-        let _ = line.push_byte(b':');
-        let _ = line.push_u64(addr.port as u64);
-        let _ = line.push(b" (root: ");
-        let _ = line.push(self.config.root());
-        let _ = line.push(b", uploads: ");
-        let _ = line.push(if self.config.upload() { b"on" } else { b"off" });
-        let _ = line.push(b")\n");
-        self.platform.log(line.as_slice());
+        log_startup(
+            &mut self.platform,
+            addr,
+            self.config.root(),
+            self.config.upload(),
+            b"",
+        );
     }
 
     fn log_request(&mut self, method: Method, path: &[u8], status: Status, len: u64) {
@@ -1030,6 +1024,84 @@ enum ReadOutcome {
     Closed,
     TooLarge,
     Io,
+}
+
+pub(crate) fn log_startup<P: Platform>(
+    platform: &mut P,
+    addr: SocketAddr,
+    root: &[u8],
+    upload: bool,
+    async_label: &[u8],
+) {
+    let mut line = FixedBuf::<LOG_BUF>::new();
+    let _ = line.push(b"syswebd ");
+    let _ = line.push(crate::VERSION.as_bytes());
+    let _ = line.push(async_label);
+    if addr.ip == [0, 0, 0, 0] {
+        let _ = line.push(b" listening on port ");
+        let _ = line.push_u64(addr.port as u64);
+        let _ = line.push(b" of all interfaces\n");
+        platform.log(line.as_slice());
+
+        let mut interfaces = [Interface::default(); 8];
+        let count = platform.interfaces(&mut interfaces);
+        for index in 0..count {
+            let interface = &interfaces[index];
+            if interface.addr == [0, 0, 0, 0] {
+                continue;
+            }
+            let mut duplicate = false;
+            for previous in interfaces.iter().take(index) {
+                if previous.addr == interface.addr {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if duplicate {
+                continue;
+            }
+            let mut host = FixedBuf::<128>::new();
+            let _ = host.push(b"  ");
+            if interface.name_len > 0 {
+                let _ = host.push(&interface.name[..interface.name_len]);
+            } else {
+                let _ = host.push(b"if");
+                let _ = host.push_u64(index as u64);
+            }
+            let _ = host.push(b": http://");
+            let _ = host.push_ipv4(interface.addr);
+            let _ = host.push_byte(b':');
+            let _ = host.push_u64(addr.port as u64);
+            let _ = host.push_byte(b'\n');
+            platform.log(host.as_slice());
+        }
+        if count == 0 {
+            let mut host = FixedBuf::<128>::new();
+            let _ = host.push(b"  127.0.0.1: http://127.0.0.1:");
+            let _ = host.push_u64(addr.port as u64);
+            let _ = host.push_byte(b'\n');
+            platform.log(host.as_slice());
+        }
+
+        let mut tail = FixedBuf::<LOG_BUF>::new();
+        let _ = tail.push(b"  root: ");
+        let _ = tail.push(root);
+        let _ = tail.push(b", uploads: ");
+        let _ = tail.push(if upload { b"on" } else { b"off" });
+        let _ = tail.push_byte(b'\n');
+        platform.log(tail.as_slice());
+    } else {
+        let _ = line.push(b" listening on http://");
+        let _ = line.push_ipv4(addr.ip);
+        let _ = line.push_byte(b':');
+        let _ = line.push_u64(addr.port as u64);
+        let _ = line.push(b" (root: ");
+        let _ = line.push(root);
+        let _ = line.push(b", uploads: ");
+        let _ = line.push(if upload { b"on" } else { b"off" });
+        let _ = line.push(b")\n");
+        platform.log(line.as_slice());
+    }
 }
 
 pub(crate) fn resolve_range(spec: http::RangeSpec, total: u64) -> Option<(u64, u64)> {

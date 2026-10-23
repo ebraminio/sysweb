@@ -349,17 +349,13 @@ pub fn run<P: AsyncPlatform>(mut platform: P, config: Config) -> ! {
     }
 
     if !config.quiet() {
-        let mut line = FixedBuf::<512>::new();
-        let _ = line.push(b"syswebd ");
-        let _ = line.push(crate::VERSION.as_bytes());
-        let _ = line.push(b" listening on http://");
-        let _ = line.push_ipv4(addr.ip);
-        let _ = line.push_byte(b':');
-        let _ = line.push_u64(addr.port as u64);
-        let _ = line.push(b" (async, root: ");
-        let _ = line.push(config.root());
-        let _ = line.push(b")\n");
-        platform.log(line.as_slice());
+        crate::server::log_startup(
+            &mut platform,
+            addr,
+            config.root(),
+            config.upload(),
+            b" (async)",
+        );
     }
 
     let mut slots: [Slot<P>; MAX_CONNECTIONS] = core::array::from_fn(|_| Slot::new());

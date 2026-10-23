@@ -26,7 +26,7 @@ if ("$dependents`n$imports" -match $forbidden) {
 }
 
 $dllPattern = '(?im)^\s*([A-Za-z0-9_.-]+\.dll)\s*$'
-$expected = @("KERNEL32.DLL", "SHELL32.DLL", "WS2_32.DLL")
+$expected = @("KERNEL32.DLL", "SHELL32.DLL", "WS2_32.DLL", "IPHLPAPI.DLL")
 $found = @()
 foreach ($match in [regex]::Matches($dependents, $dllPattern)) {
     $found += $match.Groups[1].Value.ToUpperInvariant()

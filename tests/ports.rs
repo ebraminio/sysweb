@@ -59,7 +59,7 @@ fn get(port: u16) -> Option<Vec<u8>> {
 #[test]
 fn implicit_default_port_falls_back_when_busy() {
     // Hold 8080 so the server's implicit default must move.
-    let _gate = match TcpListener::bind(("127.0.0.1", 8080)) {
+    let _gate = match TcpListener::bind(("0.0.0.0", 8080)) {
         Ok(gate) => gate,
         Err(_) => return, // 8080 is already occupied by the environment
     };
@@ -91,7 +91,7 @@ fn implicit_default_port_falls_back_when_busy() {
 
 #[test]
 fn explicit_port_does_not_fall_back() {
-    let gate = TcpListener::bind(("127.0.0.1", 0)).expect("reserve port");
+    let gate = TcpListener::bind(("0.0.0.0", 0)).expect("reserve port");
     let port = gate.local_addr().expect("addr").port();
     let mut server = spawn(&["--port", &port.to_string()]);
 

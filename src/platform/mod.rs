@@ -161,6 +161,30 @@ pub trait AsyncPlatform: Platform {
     ) -> Result<u64>;
 }
 
+/// One local IPv4 interface address for startup logging.
+#[derive(Clone, Copy)]
+pub struct Interface {
+    pub name: [u8; 16],
+    pub name_len: usize,
+    pub addr: [u8; 4],
+}
+
+impl Interface {
+    pub const fn new() -> Self {
+        Self {
+            name: [0; 16],
+            name_len: 0,
+            addr: [0; 4],
+        }
+    }
+}
+
+impl Default for Interface {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// The OS services used by the server.
 ///
 /// Types returned by the backend own their OS handles and close them on drop.
@@ -176,6 +200,8 @@ pub trait Platform {
     /// directory, and symlink rules apply only beneath it.
     fn set_root(&mut self, root: &[u8]) -> Result<()>;
     fn bind(&mut self, addr: SocketAddr, backlog: u16) -> Result<Self::Listener>;
+    /// Fill `out` with up-facing IPv4 interface addresses. Returns the count.
+    fn interfaces(&mut self, out: &mut [Interface]) -> usize;
     fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
     fn read(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
     fn write_all(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<()>;

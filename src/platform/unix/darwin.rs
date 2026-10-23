@@ -8,7 +8,7 @@
 //! allocate inside libSystem.
 
 use crate::path::MAX_PATH;
-use crate::platform::{Error, FileInfo, Result, SocketAddr};
+use crate::platform::{Error, FileInfo, Interface, Result, SocketAddr};
 use core::ffi::c_void;
 use core::ptr::null_mut;
 
@@ -86,6 +86,18 @@ struct Kevent {
 }
 
 #[repr(C)]
+struct IfAddrs {
+    next: *mut IfAddrs,
+    name: *const u8,
+    flags: u32,
+    _pad: u32,
+    addr: *const SockaddrIn,
+    netmask: *const SockaddrIn,
+    ifu: *const SockaddrIn,
+    data: *mut u8,
+}
+
+#[repr(C)]
 struct Dirent {
     d_ino: u64,
     d_seekoff: i64,
@@ -141,6 +153,10 @@ unsafe extern "C" {
         nevents: i32,
         timeout: *const Timespec,
     ) -> i32;
+    #[link_name = "getifaddrs"]
+    fn c_getifaddrs(out: *mut *mut IfAddrs) -> i32;
+    #[link_name = "freeifaddrs"]
+    fn c_freeifaddrs(list: *mut IfAddrs);
     #[link_name = "fdopendir"]
     fn c_fdopendir(fd: i32) -> *mut u8;
     #[link_name = "readdir"]
@@ -320,6 +336,42 @@ pub fn sendfile(out_fd: i32, in_fd: i32, offset: u64, count: usize) -> Result<us
     } else {
         Ok(length as usize)
     }
+}
+
+pub fn interfaces(out: &mut [Interface]) -> Result<usize> {
+    const IFF_UP: u32 = 0x1;
+    let mut list: *mut IfAddrs = core::ptr::null_mut();
+    if unsafe { c_getifaddrs(&mut list) } != 0 {
+        return Err(last_error());
+    }
+    let mut count = 0usize;
+    let mut current = list;
+    while !current.is_null() && count < out.len() {
+        let entry = unsafe { &*current };
+        current = entry.next;
+        if entry.flags & IFF_UP == 0 || entry.addr.is_null() {
+            continue;
+        }
+        let addr = unsafe { &*entry.addr };
+        if addr.family != AF_INET as u8 {
+            continue;
+        }
+        let mut name_len = 0usize;
+        if !entry.name.is_null() {
+            while name_len < 15 && unsafe { *entry.name.add(name_len) } != 0 {
+                name_len += 1;
+            }
+        }
+        if !entry.name.is_null() {
+            out[count].name[..name_len]
+                .copy_from_slice(unsafe { core::slice::from_raw_parts(entry.name, name_len) });
+        }
+        out[count].name_len = name_len;
+        out[count].addr = addr.addr;
+        count += 1;
+    }
+    unsafe { c_freeifaddrs(list) };
+    Ok(count)
 }
 
 /// Darwin's `sendfile` can raise SIGPIPE; set SO_NOSIGPIPE on every accepted

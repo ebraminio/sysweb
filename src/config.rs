@@ -17,7 +17,7 @@ pub const USAGE: &str = concat!(
      OPTIONS:\n\
      \x20   -r, --root <DIR>       Directory to serve (default: .)\n\
      \x20   -p, --port <PORT>      TCP port, 1-65535 (default: 8080)\n\
-     \x20   -H, --host <ADDR>      IPv4 address to bind (default: 127.0.0.1)\n\
+     \x20   -H, --host <ADDR>      IPv4 address to bind (default: 0.0.0.0)\n\
      \x20       --backlog <N>      Listen backlog (default: 128)\n\
      \x20       --idle-timeout <S> Async idle timeout in seconds (default: 30)\n\
      \x20       --upload           Enable PUT uploads and folder creation\n\
@@ -87,7 +87,7 @@ pub enum ParseOutcome {
 impl Config {
     pub fn parse(args: &[&[u8]]) -> Result<ParseOutcome, ConfigError> {
         let mut port = DEFAULT_PORT;
-        let mut host = [127, 0, 0, 1];
+        let mut host = [0, 0, 0, 0];
         let mut backlog = DEFAULT_BACKLOG;
         let mut root: &[u8] = b".";
         let mut quiet = false;
@@ -379,7 +379,7 @@ mod tests {
     fn defaults() {
         let config = run(&[b"syswebd"]);
         assert_eq!(config.root(), b".");
-        assert_eq!(config.addr().ip, [127, 0, 0, 1]);
+        assert_eq!(config.addr().ip, [0, 0, 0, 0]);
         assert_eq!(config.addr().port, 8080);
         assert_eq!(config.backlog(), 128);
         assert!(!config.quiet());

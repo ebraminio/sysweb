@@ -26,8 +26,8 @@ compile_error!(
 );
 
 use super::{
-    AsyncPlatform, DirEntry, EntryKind, Error, Event, FileInfo, Interest, Platform, Result,
-    SocketAddr,
+    AsyncPlatform, DirEntry, EntryKind, Error, Event, FileInfo, Interest, Interface, Platform,
+    Result, SocketAddr,
 };
 
 const DIR_BUFFER: usize = 4096;
@@ -180,6 +180,10 @@ impl Platform for Sys {
         }
         self.root_fd = fd;
         Ok(())
+    }
+
+    fn interfaces(&mut self, out: &mut [Interface]) -> usize {
+        abi::interfaces(out).unwrap_or(0)
     }
 
     fn bind(&mut self, addr: SocketAddr, backlog: u16) -> Result<Self::Listener> {
@@ -588,6 +592,15 @@ pub fn exit(code: i32) -> ! {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lists_loopback_interface() {
+        use super::{Interface, Platform, Sys};
+        let mut sys = Sys::new();
+        let mut interfaces = [Interface::default(); 16];
+        let count = sys.interfaces(&mut interfaces);
+        assert!(count > 0, "no IPv4 interfaces found");
+    }
+
     #[test]
     fn sleep_returns() {
         let start = std::time::Instant::now();

@@ -75,7 +75,7 @@ binary imports only the functions in the allowlist checked by
 A CRT-free Win32 backend runs on Windows 11 with the same async state machine:
 GET, ranges, PUT, multipart POST, and directory listings work. Socket readiness
 currently uses `WSAPoll`; IOCP is the next Windows step. The backend imports
-only `KERNEL32.dll`, `SHELL32.dll`, and `WS2_32.dll`.
+only `KERNEL32.dll`, `SHELL32.dll`, `WS2_32.dll`, and `IPHLPAPI.dll`.
 
 Two supporting spikes are also validated:
 
@@ -109,8 +109,14 @@ itself may live under a symlinked system directory such as macOS `/var`.
 ```sh
 cargo build --release
 
-# Serve the repository demo (read-only, loopback):
+# Serve the repository demo (read-only; default all interfaces):
 ./target/release/syswebd --root public --port 8080
+
+# Startup lists reachable interface URLs, for example:
+#   syswebd 0.1.0 (async) listening on port 8080 of all interfaces
+#     lo0: http://127.0.0.1:8080
+#     en0: http://192.168.1.130:8080
+#     root: public, uploads: off
 
 # Browser:
 #   http://127.0.0.1:8080/
@@ -181,7 +187,7 @@ OPTIONS:
     -r, --root <DIR>       Directory to serve (default: .)
     -p, --port <PORT>      TCP port, 1-65535 (default: 8080; if omitted,
                            a busy default falls back to the next free port)
-    -H, --host <ADDR>      IPv4 address to bind (default: 127.0.0.1)
+    -H, --host <ADDR>      IPv4 address to bind (default: 0.0.0.0)
         --backlog <N>      Listen backlog (default: 128)
         --upload           Enable PUT uploads and folder creation
         --replace          Allow uploads to replace existing files
@@ -194,7 +200,10 @@ OPTIONS:
     -V, --version          Print the version
 ```
 
-The default bind address is loopback. If the default port 8080 is occupied and
+The default bind is all IPv4 interfaces (`0.0.0.0`). Pass `--host 127.0.0.1`
+for a localhost-only server. At startup the server lists each interface URL,
+e.g. `lo0: http://127.0.0.1:8080` and `en0: http://192.168.1.130:8080`.
+If the default port 8080 is occupied and
 no `--port` was given, the server tries the next ports. Use `--host 0.0.0.0`
 only when you mean it; this server has no TLS, authentication, or rate limiting.
 

@@ -34,7 +34,7 @@ In scope:
 - malformed request lines and methods;
 - client disconnects and partial writes;
 - malicious uploads, stored XSS, disk exhaustion;
-- cross-site requests against a loopback-bound server;
+- cross-site requests against a `--host 127.0.0.1` server;
 - resource exhaustion through slow or many connections.
 
 Out of scope for 0.1:
@@ -48,7 +48,9 @@ Out of scope for 0.1:
 
 ## Current protections
 
-- **Loopback by default.** The server binds `127.0.0.1:8080` unless `--host` is
+- **All interfaces by default.** The server binds `0.0.0.0:8080` unless
+  `--host 127.0.0.1` is passed. Read-only files are reachable from the local
+  network; uploads remain off unless `--upload` is passed.
   given. Exposing it is an explicit decision.
 - **Origin-form targets only.** Absolute URLs, authority-form, and `*` are
   rejected.
@@ -122,7 +124,7 @@ you control.
 
 With `--upload`, anyone who can reach the port can write files, create
 directories, and (with `--replace`) overwrite them. There is no authentication,
-quota, or per-client limit. Keep the loopback default, or put an authenticated
+quota, or per-client limit. Prefer `--host 127.0.0.1`, or put an authenticated
 reverse proxy in front.
 
 The classic multipart form uses a normal HTML `POST`, which browsers do not
@@ -140,7 +142,7 @@ separate origin, or keep uploads disabled.
 There is no `Origin`/`Host` allowlist and no CSRF token. A browser on the same
 machine can attempt requests to `127.0.0.1:8080`; modern cross-origin `PUT`
 requests trigger CORS preflight, which this server does not answer, but do not
-rely on that as a security boundary. Keep the default loopback bind and do not
+rely on that as a security boundary. Prefer `--host 127.0.0.1` and do not
 enable uploads on a machine where arbitrary local web content is a concern.
 
 ### Disk exhaustion
@@ -196,7 +198,7 @@ minimal document root.
 
 ## Hardening checklist for operators
 
-- Keep the default loopback bind unless you need otherwise.
+- Keep `--host 127.0.0.1` unless LAN exposure is intended.
 - Run as an unprivileged user with read-only access to the document root.
 - Leave `--upload` off unless you need it; never combine it with a public bind.
 - If uploads are needed, use a separate directory/origin and an authenticated

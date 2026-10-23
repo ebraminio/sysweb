@@ -3,8 +3,8 @@
 #![allow(non_snake_case)]
 
 use crate::platform::{
-    AsyncPlatform, DirEntry, EntryKind, Error, Event, FileInfo, Interest, Platform, Result,
-    SocketAddr,
+    AsyncPlatform, DirEntry, EntryKind, Error, Event, FileInfo, Interest, Interface, Platform,
+    Result, SocketAddr,
 };
 use core::ffi::c_void;
 use core::ptr::null_mut;
@@ -503,11 +503,80 @@ fn sockaddr(addr: SocketAddr) -> SockaddrIn {
     }
 }
 
+#[link(name = "iphlpapi")]
+unsafe extern "system" {
+    fn GetIpAddrTable(table: *mut u8, size: *mut u32, order: i32) -> u32;
+}
+
+fn interface_name(index: u32, out: &mut Interface) {
+    let mut digits = [0u8; 10];
+    let mut count = 0usize;
+    let mut value = index;
+    if value == 0 {
+        digits[0] = b'0';
+        count = 1;
+    } else {
+        while value > 0 {
+            digits[count] = b'0' + (value % 10) as u8;
+            value /= 10;
+            count += 1;
+        }
+    }
+    out.name[..2].copy_from_slice(b"if");
+    let mut pos = 2usize;
+    while count > 0 && pos < out.name.len() {
+        count -= 1;
+        out.name[pos] = digits[count];
+        pos += 1;
+    }
+    out.name_len = pos;
+}
+
 impl Platform for Sys {
     type Listener = Listener;
     type Stream = Stream;
     type File = File;
     type Dir = Dir;
+
+    fn interfaces(&mut self, out: &mut [Interface]) -> usize {
+        let mut buffer = [0u8; 4096];
+        let mut size = buffer.len() as u32;
+        let result = unsafe { GetIpAddrTable(buffer.as_mut_ptr(), &mut size, 1) };
+        if result != 0 || size < 4 {
+            return 0;
+        }
+        let count = u32::from_ne_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+        let mut written = 0usize;
+        for index in 0..count {
+            if written >= out.len() {
+                break;
+            }
+            let offset = 4 + index * 24;
+            if offset + 24 > buffer.len() {
+                break;
+            }
+            let addr = u32::from_ne_bytes([
+                buffer[offset],
+                buffer[offset + 1],
+                buffer[offset + 2],
+                buffer[offset + 3],
+            ])
+            .to_ne_bytes();
+            let interface_index = u32::from_ne_bytes([
+                buffer[offset + 4],
+                buffer[offset + 5],
+                buffer[offset + 6],
+                buffer[offset + 7],
+            ]);
+            if addr == [0, 0, 0, 0] {
+                continue;
+            }
+            interface_name(interface_index, &mut out[written]);
+            out[written].addr = addr;
+            written += 1;
+        }
+        written
+    }
 
     fn set_root(&mut self, root: &[u8]) -> Result<()> {
         if root.is_empty() || root.len() >= MAX_WPATH {

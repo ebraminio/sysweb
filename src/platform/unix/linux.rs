@@ -1,7 +1,7 @@
 //! Linux raw syscall ABI (x86_64 and aarch64). No libc is involved.
 
 use crate::path::MAX_PATH;
-use crate::platform::{Error, FileInfo, Result, SocketAddr};
+use crate::platform::{Error, FileInfo, Interface, Result, SocketAddr};
 use core::arch::asm;
 use core::ptr::read_unaligned;
 
@@ -15,6 +15,7 @@ mod nr {
     pub const CLOSE: usize = 3;
     pub const STATX: usize = 332;
     pub const SOCKET: usize = 41;
+    pub const IOCTL: usize = 16;
     pub const ACCEPT: usize = 43;
     pub const SENDFILE: usize = 40;
     pub const SENDTO: usize = 44;
@@ -41,6 +42,7 @@ mod nr {
     pub const CLOSE: usize = 57;
     pub const STATX: usize = 291;
     pub const SOCKET: usize = 198;
+    pub const IOCTL: usize = 29;
     pub const ACCEPT: usize = 202;
     pub const SENDFILE: usize = 71;
     pub const SENDTO: usize = 206;
@@ -64,9 +66,11 @@ use nr::*;
 
 const AF_INET: usize = 2;
 const SOCK_STREAM: usize = 1;
+const SOCK_DGRAM: usize = 2;
 const SOL_SOCKET: usize = 1;
 const SO_REUSEADDR: usize = 2;
 const MSG_NOSIGNAL: usize = 0x4000;
+const SIOCGIFCONF: usize = 0x8912;
 const AT_FDCWD: usize = (-100isize) as usize;
 const AT_SYMLINK_NOFOLLOW: usize = 0x100;
 const AT_EMPTY_PATH: usize = 0x1000;
@@ -299,6 +303,65 @@ struct SockaddrIn {
     port: [u8; 2],
     addr: [u8; 4],
     zero: [u8; 8],
+}
+
+#[repr(C)]
+struct IfReq {
+    name: [u8; 16],
+    addr: SockaddrIn,
+    pad: [u8; 8],
+}
+
+#[repr(C)]
+struct IfConf {
+    len: i32,
+    buf: *mut u8,
+}
+
+pub fn datagram_socket() -> Result<i32> {
+    let result = unsafe { syscall6(SOCKET, AF_INET, SOCK_DGRAM, 0, 0, 0, 0) };
+    Ok(decode(result)? as i32)
+}
+
+pub fn interfaces(out: &mut [Interface]) -> Result<usize> {
+    let fd = datagram_socket()?;
+    let mut buffer = [0u8; 4096];
+    let mut conf = IfConf {
+        len: buffer.len() as i32,
+        buf: buffer.as_mut_ptr(),
+    };
+    let result = unsafe {
+        syscall6(
+            IOCTL,
+            fd as usize,
+            SIOCGIFCONF,
+            &mut conf as *mut IfConf as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    let _ = close(fd);
+    decode(result)?;
+
+    let mut count = 0usize;
+    let mut offset = 0usize;
+    while offset + core::mem::size_of::<IfReq>() <= conf.len as usize && count < out.len() {
+        let request = unsafe { &*(buffer.as_ptr().add(offset) as *const IfReq) };
+        offset += core::mem::size_of::<IfReq>();
+        if request.addr.family != AF_INET as u16 {
+            continue;
+        }
+        let mut name_len = 0usize;
+        while name_len < request.name.len() && request.name[name_len] != 0 {
+            name_len += 1;
+        }
+        out[count].name[..name_len].copy_from_slice(&request.name[..name_len]);
+        out[count].name_len = name_len;
+        out[count].addr = request.addr.addr;
+        count += 1;
+    }
+    Ok(count)
 }
 
 pub fn socket() -> Result<i32> {

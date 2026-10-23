@@ -669,7 +669,7 @@ several.
   fallbacks for older kernels/OS releases; this is deliberate.
 - **Uploads are powerful**: `--upload` lets any client that can reach the port
   write files; `--replace` can overwrite them. There is no authentication,
-  quota, or CSRF/Host validation yet. Keep the default loopback bind.
+  quota, or CSRF/Host validation yet. Prefer `--host 127.0.0.1` for local-only use.
 - **Partial files**: a failed upload is unlinked, but a successful upload is
   written in place, not via temp+rename. `--replace` can therefore truncate an
   existing file before a failure. Atomic uploads are roadmap.
