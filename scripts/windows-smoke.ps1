@@ -57,7 +57,7 @@ try {
         }
     }
 
-    $jobs = 1..3 | ForEach-Object {
+    $jobs = 1..4 | ForEach-Object {
         Start-Job -ScriptBlock {
             param($url)
             (Invoke-WebRequest -UseBasicParsing $url).StatusCode
