@@ -1,0 +1,63 @@
+param(
+    [Parameter(Mandatory = $true)][string]$Exe,
+    [int]$Port = 19222
+)
+
+$ErrorActionPreference = "Stop"
+$base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
+$root = Join-Path $base "sysweb-win-root"
+$outside = Join-Path $base "sysweb-win-outside"
+Remove-Item -Recurse -Force $root, $outside -ErrorAction SilentlyContinue
+New-Item -ItemType Directory $root, $outside | Out-Null
+Set-Content -NoNewline -Path (Join-Path $root "hello.txt") -Value "windows smoke"
+Set-Content -NoNewline -Path (Join-Path $outside "secret.txt") -Value "outside secret"
+cmd /c mklink /J (Join-Path $root "link") $outside | Out-Null
+
+$proc = Start-Process -FilePath $Exe `
+    -ArgumentList "--root", $root, "--port", $Port, "--upload", "--quiet" -PassThru
+Start-Sleep -Milliseconds 800
+try {
+    $response = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$Port/hello.txt"
+    if ($response.StatusCode -ne 200 -or $response.Content -ne "windows smoke") {
+        throw "GET failed"
+    }
+
+    $put = Invoke-WebRequest -UseBasicParsing -Method Put -Body "put smoke" `
+        "http://127.0.0.1:$Port/put.txt"
+    if ($put.StatusCode -ne 201) { throw "PUT failed" }
+
+    $form = Join-Path $root "put.txt"
+    $post = & curl.exe -sS -o NUL -w "%{http_code}" -F "file=@$form;filename=post.txt" `
+        "http://127.0.0.1:$Port/"
+    if ($post -ne "201") { throw "POST failed: $post" }
+
+    $range = & curl.exe -sS -H "Range: bytes=1-3" "http://127.0.0.1:$Port/hello.txt"
+    if ($range -ne "ind") { throw "range failed: $range" }
+
+    # A junction inside the root must not expose the outside directory.
+    try {
+        $leak = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$Port/link/secret.txt"
+        if ($leak.StatusCode -eq 200) { throw "junction escaped the root" }
+    } catch {
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 200) {
+            throw "junction escaped the root"
+        }
+    }
+
+    $jobs = 1..3 | ForEach-Object {
+        Start-Job -ScriptBlock {
+            param($url)
+            (Invoke-WebRequest -UseBasicParsing $url).StatusCode
+        } -ArgumentList "http://127.0.0.1:$Port/"
+    }
+    $codes = $jobs | Wait-Job | Receive-Job
+    $jobs | Remove-Job
+    if (($codes | Where-Object { $_ -ne 200 }).Count -ne 0) {
+        throw "concurrent GET failed"
+    }
+
+    Write-Output "windows smoke: GET/PUT/POST/range/junction/concurrency OK"
+} finally {
+    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $root, $outside -ErrorAction SilentlyContinue
+}

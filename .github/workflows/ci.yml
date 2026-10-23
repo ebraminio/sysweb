@@ -75,23 +75,7 @@ jobs:
 
       - name: Smoke test
         shell: pwsh
-        run: |
-          $root = Join-Path $env:RUNNER_TEMP "sysweb-win-smoke"
-          Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory $root | Out-Null
-          Set-Content -NoNewline -Path (Join-Path $root "hello.txt") -Value "windows ci"
-          $proc = Start-Process -FilePath "target\release\syswebd.exe" `
-            -ArgumentList "--root", $root, "--port", "19222", "--quiet" -PassThru
-          Start-Sleep -Milliseconds 700
-          try {
-            $response = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:19222/hello.txt"
-            if ($response.StatusCode -ne 200 -or $response.Content -ne "windows ci") {
-              throw "unexpected Windows smoke response"
-            }
-            Write-Output "windows smoke: OK"
-          } finally {
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-          }
+        run: ./scripts/windows-smoke.ps1 -Exe target/release/syswebd.exe
 
   fuzz-smoke:
     name: fuzz smoke (libFuzzer)

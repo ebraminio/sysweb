@@ -75,6 +75,11 @@ jobs:
           test "$size" -le 98304
           echo "windows size: $size B <= 98304 B"
 
+      - name: Windows smoke test
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: ./scripts/windows-smoke.ps1 -Exe target/x86_64-pc-windows-msvc/release/syswebd.exe
+
       - name: Package artifact and checksum
         shell: bash
         run: |
