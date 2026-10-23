@@ -80,16 +80,23 @@ try {
         -ArgumentList "--root", $root, "--port", $idlePort, "--idle-timeout", "1", "--quiet" -PassThru
     Start-Sleep -Milliseconds 700
     try {
-        $client = [System.Net.Sockets.TcpClient]::new("127.0.0.1", $idlePort)
-        $stream = $client.GetStream()
+        $clients = @()
         $bytes = [Text.Encoding]::ASCII.GetBytes("GET / HTTP/1.1`r`nHost: x`r`n")
-        $stream.Write($bytes, 0, $bytes.Length)
+        for ($i = 0; $i -lt 4; $i++) {
+            $client = [System.Net.Sockets.TcpClient]::new("127.0.0.1", $idlePort)
+            $client.GetStream().Write($bytes, 0, $bytes.Length)
+            $clients += $client
+        }
         Start-Sleep -Milliseconds 1500
-        $stream.ReadTimeout = 1000
-        $buffer = New-Object byte[] 1
-        $read = $stream.Read($buffer, 0, 1)
-        $client.Close()
-        if ($read -ne 0) { throw "idle connection was not closed" }
+        foreach ($client in $clients) {
+            $client.GetStream().ReadTimeout = 1000
+            $buffer = New-Object byte[] 1
+            $read = $client.GetStream().Read($buffer, 0, 1)
+            $client.Close()
+            if ($read -ne 0) { throw "idle connection was not closed" }
+        }
+        $recovered = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$idlePort/hello.txt"
+        if ($recovered.StatusCode -ne 200) { throw "server did not recover after idle timeout" }
     } finally {
         Stop-Process -Id $idleProc.Id -Force -ErrorAction SilentlyContinue
     }
