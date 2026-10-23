@@ -64,7 +64,7 @@ feature map, and what is deliberately not carried forward (notably `--cmd`).
 | Linux aarch64 | ✅ cross-built + checked locally; CI check | raw syscalls, static ELF | **none** |
 | macOS arm64 | ✅ tested locally; CI job | libSystem ABI | libSystem imports only; no CRT/std |
 | macOS x86_64 | ❌ not yet | — | — |
-| Windows x86_64 | 🧪 no-CRT link spike validated; backend roadmap | Win32 / IOCP | CRT-free |
+| Windows x86_64 | 🧪 CRT-free + IOCP spikes validated; backend roadmap | Win32 / IOCP | CRT-free |
 
 Linux is the primary target for the libc-free goal. macOS uses the public
 libSystem ABI: Apple does not promise stability for raw syscall numbers or
@@ -74,9 +74,16 @@ binary imports only the functions in the allowlist checked by
 
 Windows is planned as the CRT-free IOCP backend **after** the async reactor, so
 the `Platform`/`Reactor` shape is settled first. There will not be a blocking
-Windows backend. A no-CRT entry-point/link spike is already validated:
-[`spikes/windows-no-crt`](spikes/windows-no-crt/) builds a 3,584-byte x86_64 PE
-that imports only `KERNEL32.dll` and ran on Windows 11.
+Windows backend. Two spikes are already validated:
+
+- [`spikes/windows-no-crt`](spikes/windows-no-crt/) builds a 3,584-byte x86_64
+  PE importing only `KERNEL32.dll`;
+- [`spikes/windows-iocp`](spikes/windows-iocp/) uses a completion port with
+  overlapped `WSARecv`/`WSASend` over a loopback connection; its stripped PE
+  imports only `KERNEL32.dll` and `WS2_32.dll`.
+
+Both ran on Windows 11. The IOCP spike still uses blocking `accept`; `AcceptEx`
+and the server state machine land with the real backend.
 
 ### Latest-API policy
 

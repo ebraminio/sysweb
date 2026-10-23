@@ -184,6 +184,9 @@ lands against the async `Reactor` trait.
 
 - [x] No-CRT entry/link spike: `#![no_main]`, `mainCRTStartup`,
       `/NODEFAULTLIB`, 3,584-byte PE, only `KERNEL32.dll`, runs on Windows 11.
+- [x] IOCP completion spike: `CreateIoCompletionPort` + overlapped
+      `WSARecv`/`WSASend` over loopback, 5,632-byte PE, only
+      `KERNEL32.dll`/`WS2_32.dll`; blocking `accept` remains.
 - [ ] Provide any remaining `mem*` shims for the full MSVC target (the spike
       needs none).
 - [ ] Link `kernel32`/`ws2_32` explicitly; document the exact MSVC/link.exe
