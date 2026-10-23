@@ -276,8 +276,8 @@ Current stripped sizes from this workspace:
 | Target | Size | Budget |
 | --- | ---: | ---: |
 | macOS arm64 | 101,008 B | 112 KiB |
-| Linux x86_64 | 75,512 B | 80 KiB |
-| Linux aarch64 | 73,840 B | 76 KiB |
+| Linux x86_64 | 76,192 B | 80 KiB |
+| Linux aarch64 | 74,384 B | 76 KiB |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
 workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and
@@ -388,7 +388,7 @@ This is a milestone, not a hardened internet-facing server:
 - `Connection: close` only; no keep-alive or pipelining;
 - the async reactor is the default on Unix; `--blocking` keeps the old path.
   GET/HEAD/PUT/POST use non-blocking sockets, while metadata and listing work
-  remain synchronous;
+  remain synchronous. Idle connections are closed after roughly 30 seconds;
 - uploads are off by default and have no auth, quota, or per-request size cap;
   disk exhaustion is the operator's responsibility;
 - classic form posts upload one file per request; `filename*` (RFC 5987) and

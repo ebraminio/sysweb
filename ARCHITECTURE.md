@@ -480,6 +480,7 @@ reviewable.
 The async path is now the default on Unix: epoll (Linux) or kqueue (macOS)
 readiness, non-blocking accept/read/write/sendfile, and a fixed-slot
 GET/HEAD/PUT/POST state machine. Metadata and listings remain synchronous.
+A 1-second poll tick drives the per-slot idle deadline (about 30 seconds).
 `--blocking` keeps the old path for comparison. This is not the final io_uring
 backend, but it establishes the state-machine and liveness properties.
 

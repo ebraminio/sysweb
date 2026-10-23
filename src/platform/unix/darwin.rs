@@ -412,14 +412,16 @@ pub fn kqueue_wait(kq: i32, events: &mut [super::super::Event], timeout_ms: i32)
         udata: 0,
     }; 64];
     let count = core::cmp::min(events.len(), raw.len());
+    let mut timeout_value = Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     let timeout = if timeout_ms < 0 {
         null_mut()
     } else {
-        let timeout = Timespec {
-            tv_sec: (timeout_ms / 1000) as i64,
-            tv_nsec: ((timeout_ms % 1000) * 1_000_000) as i64,
-        };
-        &timeout as *const Timespec as *mut Timespec
+        timeout_value.tv_sec = (timeout_ms / 1000) as i64;
+        timeout_value.tv_nsec = ((timeout_ms % 1000) * 1_000_000) as i64;
+        &timeout_value as *const Timespec as *mut Timespec
     };
     let ready = unsafe { c_kevent(kq, null_mut(), 0, raw.as_mut_ptr(), count as i32, timeout) };
     let ready = cvt(ready)? as usize;

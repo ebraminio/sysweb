@@ -18,6 +18,8 @@ use crate::server::{build_header, resolve_range, root_relative, HEADER_BUF, REQU
 const MAX_CONNECTIONS: usize = 8;
 const RESPONSE_BUF: usize = LISTING_BUF + HEADER_BUF;
 const EVENT_BATCH: usize = 64;
+const TICK_MS: i32 = 1000;
+const IDLE_TICKS: u32 = 30;
 const BODY_BUF: usize = 16 * 1024;
 const CONTINUE: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
 const UPLOADED: &[u8] = b"UPLOADED\n";
@@ -151,6 +153,9 @@ struct Slot<P: AsyncPlatform> {
     continue_pos: usize,
     head_only: bool,
     status: Status,
+    log_method: Method,
+    quiet: bool,
+    idle_ticks: u32,
     log_path: [u8; MAX_URL_PATH],
     log_path_len: usize,
     log_len: u64,
@@ -174,6 +179,9 @@ impl<P: AsyncPlatform> Slot<P> {
             continue_pos: 0,
             head_only: false,
             status: Status::Ok,
+            log_method: Method::Get,
+            quiet: true,
+            idle_ticks: 0,
             log_path: [0; MAX_URL_PATH],
             log_path_len: 0,
             log_len: 0,
@@ -193,6 +201,9 @@ impl<P: AsyncPlatform> Slot<P> {
         self.continue_pos = 0;
         self.head_only = false;
         self.status = Status::Ok;
+        self.log_method = Method::Get;
+        self.quiet = true;
+        self.idle_ticks = 0;
         self.log_path_len = 0;
         self.log_len = 0;
     }
@@ -245,6 +256,7 @@ impl<P: AsyncPlatform> Slot<P> {
 
     fn prepare_error_allow(&mut self, status: Status, head_only: bool, allow: &[u8]) {
         let body = status.error_body();
+        self.log_len = body.len() as u64;
         let mut header = FixedBuf::<HEADER_BUF>::new();
         if !build_header(
             &mut header,
@@ -274,6 +286,7 @@ impl<P: AsyncPlatform> Slot<P> {
 
     fn prepare_error(&mut self, status: Status, head_only: bool) {
         let body = status.error_body();
+        self.log_len = body.len() as u64;
         let _ = self.prepare_response(
             status,
             body.len() as u64,
@@ -347,17 +360,45 @@ pub fn run<P: AsyncPlatform>(mut platform: P, config: Config) -> ! {
     let mut events = [Event::default(); EVENT_BATCH];
 
     loop {
-        let ready = match platform.wait(&mut poller, &mut events, -1) {
+        let ready = match platform.wait(&mut poller, &mut events, TICK_MS) {
             Ok(ready) => ready,
             Err(Error::Interrupted) => continue,
-            Err(_) => {
-                platform.log(b"syswebd: reactor wait failed\n");
+            Err(error) => {
+                let mut line = FixedBuf::<96>::new();
+                let _ = line.push(b"syswebd: reactor wait failed: ");
+                let code = match error {
+                    Error::Other(code) => code as u64,
+                    Error::WouldBlock => 11,
+                    Error::Interrupted => 4,
+                    Error::InvalidInput => 22,
+                    _ => 0,
+                };
+                let _ = line.push_u64(code);
+                let _ = line.push_byte(b'\n');
+                platform.log(line.as_slice());
                 platform.exit(1)
             }
         };
+        if ready == 0 {
+            for (index, slot) in slots.iter_mut().enumerate() {
+                if slot.state == State::Idle {
+                    continue;
+                }
+                slot.idle_ticks += 1;
+                if slot.idle_ticks > IDLE_TICKS {
+                    close_slot(&mut platform, &mut poller, slot, index + 1);
+                }
+            }
+        }
         for event in &events[..ready] {
             if event.token == 0 {
-                accept_ready(&mut platform, &mut poller, &listener, &mut slots);
+                accept_ready(
+                    &mut platform,
+                    &mut poller,
+                    &listener,
+                    &mut slots,
+                    config.quiet(),
+                );
             } else if let Some(index) = event.token.checked_sub(1) {
                 if index < slots.len() {
                     handle_event(
@@ -379,6 +420,7 @@ fn accept_ready<P: AsyncPlatform>(
     poller: &mut P::Poller,
     listener: &P::Listener,
     slots: &mut [Slot<P>; MAX_CONNECTIONS],
+    quiet: bool,
 ) {
     loop {
         match platform.accept_nonblocking(listener) {
@@ -388,6 +430,7 @@ fn accept_ready<P: AsyncPlatform>(
                     continue;
                 };
                 slots[index].reset(stream);
+                slots[index].quiet = quiet;
                 let token = index + 1;
                 let registered = slots[index]
                     .stream
@@ -419,6 +462,8 @@ fn handle_event<P: AsyncPlatform>(
         close_slot(platform, poller, &mut slots[index], index + 1);
         return;
     }
+    slots[index].idle_ticks = 0;
+    slots[index].quiet = config.quiet();
     match slots[index].state {
         State::Reading => read_slot(platform, poller, config, &mut slots[index], index + 1),
         State::Writing => write_slot(platform, poller, &mut slots[index], index + 1),
@@ -490,6 +535,7 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
     };
 
     let method = request.method;
+    slot.log_method = method;
     let range = request.range;
     let head_only = method == Method::Head;
     let content_length = request.content_length;
@@ -1327,6 +1373,18 @@ fn close_slot<P: AsyncPlatform>(
     token: usize,
 ) {
     abort_upload(platform, slot);
+    if !slot.quiet && slot.log_path_len > 0 {
+        let mut line = FixedBuf::<1200>::new();
+        let _ = line.push(slot.log_method.as_bytes());
+        let _ = line.push_byte(b' ');
+        let _ = line.push(&slot.log_path[..slot.log_path_len]);
+        let _ = line.push_byte(b' ');
+        let _ = line.push_u64(slot.status.code() as u64);
+        let _ = line.push_byte(b' ');
+        let _ = line.push_u64(slot.log_len);
+        let _ = line.push_byte(b'\n');
+        platform.log(line.as_slice());
+    }
     if let Some(stream) = slot.stream.as_ref() {
         let _ = platform.deregister_stream(poller, stream, token);
     }
