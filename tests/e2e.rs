@@ -833,3 +833,21 @@ fn async_idle_timeout_closes_stale_connection() {
     let response = get(server.port, "/");
     assert_status(&split(&response).0, "HTTP/1.1 200 OK");
 }
+
+#[test]
+fn async_concurrent_gets_fill_all_slots() {
+    let server = start_server(&["--async"]);
+    let mut clients = Vec::new();
+    for _ in 0..7 {
+        let port = server.port;
+        clients.push(std::thread::spawn(move || {
+            let response = get(port, "/large.bin");
+            let (head, body) = split(&response);
+            assert_status(&head, "HTTP/1.1 200 OK");
+            assert_eq!(body.len(), 40_000);
+        }));
+    }
+    for client in clients {
+        client.join().expect("client thread");
+    }
+}
