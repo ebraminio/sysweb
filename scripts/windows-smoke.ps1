@@ -117,10 +117,16 @@ try {
     $blockPort = $Port + 2
     $blockProc = Start-Process -FilePath $Exe `
         -ArgumentList "--root", $root, "--port", $blockPort, "--blocking", "--quiet" -PassThru
-    Start-Sleep -Milliseconds 700
+    $blocked = $null
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        Start-Sleep -Milliseconds 100
+        try {
+            $blocked = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$blockPort/hello.txt"
+            break
+        } catch {}
+    }
     try {
-        $blocked = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$blockPort/hello.txt"
-        if ($blocked.StatusCode -ne 200) { throw "blocking fallback failed" }
+        if (-not $blocked -or $blocked.StatusCode -ne 200) { throw "blocking fallback failed" }
     } finally {
         Stop-Process -Id $blockProc.Id -Force -ErrorAction SilentlyContinue
     }
