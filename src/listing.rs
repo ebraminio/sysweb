@@ -421,7 +421,7 @@ const JS: &[u8] = br###"
 
   // IE8/old engines render <details> children raw. Hide the transfer section
   // unless the native details/summary toggle exists.
-  var transfer = byId('transfer');
+  var transfer = byId('transfer-wrap');
   var detailsProbe = document.createElement('details');
   if (transfer && typeof detailsProbe.open === 'undefined') {
     try { transfer.style.display = 'none'; } catch (e) {}
@@ -504,7 +504,7 @@ pub fn render<P: Platform>(
         || !escape_html(out, url_path)
         || !out.push(b"</title>\n<style>")
         || !out.push(CSS)
-        || !out.push(b"</style>\n<!--[if lt IE 9]><style>#transfer{display:none}</style><![endif]-->\n</head>\n<body data-path=\"")
+        || !out.push(b"</style>\n<!--[if lt IE 9]><style>#transfer-wrap{display:none}</style><![endif]-->\n</head>\n<body data-path=\"")
         || !out.push(encoded_path.as_slice())
         || !out.push(b"\" data-upload=\"")
         || !out.push(if upload { b"1" } else { b"0" })
@@ -595,10 +595,10 @@ pub fn render<P: Platform>(
         || !out.push(b"sysweb ")
         || !out.push(crate::VERSION.as_bytes())
         || !out.push(b" &middot; no_std &middot; no alloc &middot; syscalls")
-        || !out.push(b"</footer>\n<details id=\"transfer\"><summary>Terminal transfer</summary><pre>")
+        || !out.push(b"</footer>\n<div id=\"transfer-wrap\"><details id=\"transfer\"><summary>Terminal transfer</summary><pre>")
         || !out.push(b"# upload (when --upload is enabled)\ncurl -T FILE URL\n\n")
         || !out.push(b"# Windows PowerShell (multipart POST; needs --upload)\n$f = \"C:\\filename.bin\"\n$w = New-Object System.Net.WebClient\n$w.UploadFile(\"URL\", $f)\n\n")
-        || !out.push(b"# download\ncurl -O URL</pre></details>\n<script>")
+        || !out.push(b"# download\ncurl -O URL</pre></details></div>\n<script>")
         || !out.push(JS)
         || !out.push(b"</script>\n</body>\n</html>\n")
     {

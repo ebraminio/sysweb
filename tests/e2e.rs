@@ -633,8 +633,9 @@ fn multipart_forms_work_for_old_browsers() {
     assert!(page.contains("System.Net.WebClient"));
     assert!(page.contains("<span class=\"time\" data-ts="));
     assert!(!page.contains("<time "));
+    assert!(page.contains("id=\"transfer-wrap\""));
     assert!(page.contains("id=\"transfer\""));
-    assert!(page.contains("#transfer{display:none}"));
+    assert!(page.contains("#transfer-wrap{display:none}"));
     assert!(!page.contains("' in '"));
     assert!(!page.contains("'webkitdirectory' in"));
 
