@@ -143,9 +143,9 @@ For older Windows/PowerShell environments, `System.Net.WebClient` also works.
 `UploadFile` sends multipart `POST`, so `--upload` must be enabled:
 
 ```powershell
-$f = "C:\exe.exe"
+$f = "C:\filename.bin"
 $w = New-Object System.Net.WebClient
-$w.UploadFile("http://127.0.0.1:8080/files/exe.exe", $f)
+$w.UploadFile("http://127.0.0.1:8080/files/filename.bin", $f)
 ```
 
 The `X-Filename` header sometimes used with this pattern is not required:
