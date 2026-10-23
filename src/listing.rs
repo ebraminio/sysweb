@@ -189,7 +189,23 @@ const JS: &[u8] = br###"
   function flatItems(files) {
     var items = [];
     for (var i = 0; i < files.length; i++) {
-      items.push({ file: files[i], relative: files[i].webkitRelativePath || files[i].name });
+      var file = files[i];
+      var relative = file.webkitRelativePath;
+      if (!relative) {
+        var name = file.name;
+        // Clipboard screenshots arrive as image.png/jpeg/...; rename them like
+        // pad.js did so repeated pastes do not collide.
+        if (!name || name.split('.')[0] === 'image') {
+          var ext = 'png';
+          if (file.type && file.type.indexOf('image/') === 0) {
+            ext = file.type.substring(6);
+            if (!ext || ext.indexOf('+') !== -1) ext = 'png';
+          }
+          name = new Date().getTime() + '-' + i + '.' + ext;
+        }
+        relative = name;
+      }
+      items.push({ file: file, relative: relative });
     }
     return items;
   }
@@ -344,8 +360,12 @@ const JS: &[u8] = br###"
     } catch (e) { setStatus(name + ': cannot send text'); }
   }
 
-  function handleTransfer(data, allowText) {
+  function handleTransfer(data, allowText, preferFiles) {
     if (!data) return false;
+    if (preferFiles && data.files && data.files.length) {
+      uploadItems(flatItems(data.files));
+      return true;
+    }
     if (itemsFromData(data, function (items) { uploadItems(items); })) return true;
     if (allowText && data.getData) {
       var text = data.getData('text/plain');
@@ -402,13 +422,13 @@ const JS: &[u8] = br###"
         addEvent(document, 'drop', function (event) {
           if (event.preventDefault) event.preventDefault();
           removeClass(drop, 'over');
-          handleTransfer(event.dataTransfer, false);
+          handleTransfer(event.dataTransfer, false, false);
         });
         addEvent(document, 'paste', function (event) {
           var target = event.target;
           if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
           var data = event.clipboardData || window.clipboardData;
-          if (handleTransfer(data, true)) {
+          if (handleTransfer(data, true, true)) {
             if (event.preventDefault) event.preventDefault();
           }
         });
