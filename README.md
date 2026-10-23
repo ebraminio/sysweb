@@ -64,7 +64,7 @@ feature map, and what is deliberately not carried forward (notably `--cmd`).
 | Linux aarch64 | ✅ cross-built + checked locally; CI check | raw syscalls, static ELF | **none** |
 | macOS arm64 | ✅ tested locally; CI job | libSystem ABI | libSystem imports only; no CRT/std |
 | macOS x86_64 | ❌ not yet | — | — |
-| Windows x86_64 | ✅ CRT-free Win32 async (`WSAPoll`) tested; IOCP next | Win32 / shell32 / ws2_32 | **none** |
+| Windows x86_64 | ✅ CRT-free Win32 async (`WSAPoll`) tested; CI + release artifact | Win32 / shell32 / ws2_32 | **none** |
 
 Linux is the primary target for the libc-free goal. macOS uses the public
 libSystem ABI: Apple does not promise stability for raw syscall numbers or
@@ -279,7 +279,7 @@ Current stripped sizes from this workspace:
 | macOS arm64 | 101,008 B | 112 KiB |
 | Linux x86_64 | 76,192 B | 80 KiB |
 | Linux aarch64 | 74,384 B | 76 KiB |
-| Windows x86_64 | 72,704 B | no CI budget yet |
+| Windows x86_64 | 72,704 B | 96 KiB |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
 workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and

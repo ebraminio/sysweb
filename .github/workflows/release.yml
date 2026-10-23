@@ -34,6 +34,9 @@ jobs:
           - runner: macos-latest
             target: aarch64-apple-darwin
             platform: macos-arm64
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x86_64
     steps:
       - uses: actions/checkout@v4
 
@@ -49,6 +52,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Tests (release + LTO)
+        if: matrix.target != 'x86_64-pc-windows-msvc'
         run: cargo test --release --target ${{ matrix.target }} -- --test-threads=1
 
       - name: Relink release with lld (aarch64)
@@ -56,10 +60,20 @@ jobs:
         run: cargo rustc --release --target ${{ matrix.target }} --bin syswebd -- -C linker=ld.lld
 
       - name: Verify no external runtime dependencies
+        if: matrix.target != 'x86_64-pc-windows-msvc'
         run: ./scripts/check-binary.sh target/${{ matrix.target }}/release/syswebd
 
       - name: Verify binary size budget
+        if: matrix.target != 'x86_64-pc-windows-msvc'
         run: ./scripts/check-size.sh target/${{ matrix.target }}/release/syswebd
+
+      - name: Verify Windows binary size
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          size="$(wc -c < target/x86_64-pc-windows-msvc/release/syswebd.exe)"
+          test "$size" -le 98304
+          echo "windows size: $size B <= 98304 B"
 
       - name: Package artifact and checksum
         shell: bash
@@ -68,13 +82,20 @@ jobs:
           short="${GITHUB_SHA:0:12}"
           stem="sysweb-${short}-${{ matrix.platform }}"
           mkdir -p "dist/${stem}"
-          cp "target/${{ matrix.target }}/release/syswebd" "dist/${stem}/syswebd"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/syswebd.exe" "dist/${stem}/syswebd.exe"
+          else
+            cp "target/${{ matrix.target }}/release/syswebd" "dist/${stem}/syswebd"
+          fi
           cp README.md LICENSE "dist/${stem}/"
           tar -C dist -czf "dist/${stem}.tar.gz" "${stem}"
           if command -v sha256sum >/dev/null 2>&1; then
             (cd dist && sha256sum "${stem}.tar.gz" > "${stem}.tar.gz.sha256")
-          else
+          elif command -v shasum >/dev/null 2>&1; then
             (cd dist && shasum -a 256 "${stem}.tar.gz" > "${stem}.tar.gz.sha256")
+          else
+            hash="$(certutil -hashfile "dist/${stem}.tar.gz" SHA256 | sed -n '2p' | tr -d ' \r')"
+            printf '%s  %s\n' "$hash" "${stem}.tar.gz" > "dist/${stem}.tar.gz.sha256"
           fi
           ls -l dist
 
