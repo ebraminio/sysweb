@@ -229,6 +229,45 @@ mod tests {
     }
 
     #[test]
+    fn generated_paths_never_retain_parent_segments() {
+        const ALPHABET: &[u8] = b"/.%2e\\?&#;,abcdefghijklmnopqrstuvwxyz0123456789-_~\x00\x01\x7f";
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..50_000 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let len = 1 + (state as usize % 96);
+            let mut input = [0u8; 96];
+            input[0] = b'/';
+            for byte in &mut input[1..len] {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *byte = ALPHABET[(state as usize) % ALPHABET.len()];
+            }
+
+            let mut out = [0u8; MAX_URL_PATH];
+            let Ok(n) = normalize(&input[..len], &mut out) else {
+                continue;
+            };
+            let path = &out[..n];
+            assert_eq!(path.first(), Some(&b'/'));
+            assert!(
+                !path
+                    .split(|&byte| byte == b'/')
+                    .any(|segment| segment == b".."),
+                "parent segment survived normalization"
+            );
+            assert!(
+                !path
+                    .iter()
+                    .any(|&byte| byte == 0 || byte == b'\\' || byte < 0x20 || byte == 0x7f),
+                "forbidden byte survived normalization"
+            );
+        }
+    }
+
+    #[test]
     fn appends_index_only_to_directory_paths() {
         let mut out = [0u8; MAX_PATH];
         let n = append_index(b"assets/", &mut out).unwrap();

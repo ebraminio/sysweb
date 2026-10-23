@@ -109,7 +109,7 @@ Make the blocking server pleasant and safe enough to run on a LAN.
 - [x] `EMFILE` backoff instead of terminating the process.
 - [ ] Configurable maximum request-header size and connection limit.
 - [ ] Never log raw control bytes; keep the current normalized-path logging.
-- [ ] Property test: no input to `normalize` can produce a `..` segment.
+- [x] Property test: no input to `normalize` can produce a `..` segment.
 - [ ] Miri/UB review of the unsafe modules where feasible.
 
 ### Verification

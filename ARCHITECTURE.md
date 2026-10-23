@@ -649,9 +649,10 @@ several.
   multipart state machine; `tests/security.rs` sends adversarial and
   randomized requests to the real binary and checks status bounds, timeouts,
   process survival, and outside-file leakage.
-- Future: fuzz the listing escaper and the range resolver too; property-test the path invariant
-  (`..` cannot survive normalization) more deeply; soak-test the async reactor
-  and slow uploads.
+- `path::normalize` has a deterministic generated-input property test in addition
+  to the fuzz target: successful outputs never retain a `..` segment or a
+  forbidden byte. Future: fuzz the listing escaper and range resolver; soak-test
+  the async reactor and slow uploads.
 
 ## Known risks
 
