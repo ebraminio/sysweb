@@ -631,9 +631,9 @@ fn multipart_forms_work_for_old_browsers() {
     assert!(page.contains("id=\"paste-text\""));
     assert!(page.contains("id=\"text-dialog\""));
     assert!(page.contains("id=\"text-body\""));
-    assert!(page.contains("action=\"?sysweb-form=1\""));
+    assert!(page.contains("action=\"/assets/?sysweb-form=1\""));
     assert!(page.contains("id=\"classic-text\""));
-    assert!(page.contains("action=\"?sysweb-text=1\""));
+    assert!(page.contains("action=\"/assets/?sysweb-text=1\""));
     assert!(!page.contains("display: flex"));
     assert!(!page.contains("inline-flex"));
     assert!(!page.contains("rem;"));

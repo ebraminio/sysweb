@@ -600,11 +600,15 @@ pub fn render<P: Platform>(
     }
 
     if upload {
-        if !out.push(b"<form id=\"classic-upload\" class=\"tools\" method=\"post\" enctype=\"multipart/form-data\" action=\"?sysweb-form=1\">")
+        if !out.push(b"<form id=\"classic-upload\" class=\"tools\" method=\"post\" enctype=\"multipart/form-data\" action=\"")
+            || !out.push(encoded_path.as_slice())
+            || !out.push(b"?sysweb-form=1\">")
             || !out.push(b"<label class=\"btn primary\">Upload (form)<input type=\"file\" name=\"file\"></label>")
             || !out.push(b"<button class=\"btn\" type=\"submit\">Upload</button>")
             || !out.push(b"</form>\n")
-            || !out.push(b"<form id=\"classic-text\" class=\"tools\" method=\"get\" action=\"?sysweb-text=1\">")
+            || !out.push(b"<form id=\"classic-text\" class=\"tools\" method=\"get\" action=\"")
+            || !out.push(encoded_path.as_slice())
+            || !out.push(b"?sysweb-text=1\">")
             || !out.push(b"<label>Text file <input name=\"name\" type=\"text\" value=\"pasted.txt\"></label>")
             || !out.push(b"<textarea name=\"text\" rows=\"4\" placeholder=\"Paste or type text\"></textarea>")
             || !out.push(b"<button class=\"btn\" type=\"submit\">Upload text</button></form>\n")
