@@ -56,6 +56,11 @@ try {
         throw "concurrent GET failed"
     }
 
+    for ($i = 0; $i -lt 50; $i++) {
+        $load = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$Port/"
+        if ($load.StatusCode -ne 200) { throw "sequential load failed" }
+    }
+
     # Idle deadline: a partial request must be closed.
     $idlePort = $Port + 1
     $idleProc = Start-Process -FilePath $Exe `

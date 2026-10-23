@@ -478,7 +478,9 @@ reviewable.
 ## Async design (milestone 1)
 
 Backend status: Linux uses epoll, macOS uses kqueue, and both run the same
-fixed-slot state machine. io_uring has a prototype but is not enabled; the
+fixed-slot state machine. A liburing probe confirmed the SQ/CQE layout and
+`POLL_ADD` token ABI; the Rust rearm path remains the blocker, so io_uring is
+not enabled; the
 Windows IOCP spike proves `AcceptEx`/`WSARecv`/`WSASend`, but the full Win32
 backend is not implemented.
 
