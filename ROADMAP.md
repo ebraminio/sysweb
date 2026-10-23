@@ -285,3 +285,6 @@ Every milestone must preserve:
   `OVERLAPPED` state? Likely a separate `AsyncFile` associated type.
 - Can `async fn` in traits be used without an allocator/executor, or is the
   hand-written state machine permanently simpler? Current bias: state machine.
+  A no-alloc async/await spike (`spikes/async-no-alloc`) found a 16-byte future
+  and 1.2–1.3 KiB static Linux binaries, but has not tested self-borrowing
+  per-connection futures or a reactor waker.

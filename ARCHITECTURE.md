@@ -483,6 +483,11 @@ a futures executor and its state machines tend to want allocation and add a lot
 of machinery for a static file server. A hand-written state machine over
 readiness events is smaller and fully no-alloc.
 
+A no-alloc async/await spike exists at `spikes/async-no-alloc`; it records a
+16-byte demo future and 1.2–1.3 KiB static Linux binaries. That answers the
+size question, not the self-referential fixed-slot question, so the state
+machine remains the production plan.
+
 ### Reactor trait sketch
 
 ```rust
