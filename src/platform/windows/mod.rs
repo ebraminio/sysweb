@@ -31,6 +31,7 @@ const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+const INVALID_FILE_ATTRIBUTES: u32 = 0xffff_ffff;
 const ERROR_FILE_NOT_FOUND: u32 = 2;
 const ERROR_PATH_NOT_FOUND: u32 = 3;
 const ERROR_ACCESS_DENIED: u32 = 5;
@@ -155,6 +156,7 @@ unsafe extern "system" {
     fn FindNextFileW(handle: *mut c_void, data: *mut Win32FindDataW) -> i32;
     fn FindClose(handle: *mut c_void) -> i32;
     fn GetLastError() -> u32;
+    fn GetFileAttributesW(path: *const u16) -> u32;
     fn Sleep(ms: u32);
     fn ExitProcess(code: u32) -> !;
     fn MultiByteToWideChar(
@@ -339,6 +341,55 @@ impl Sys {
         }
         out[len] = 0;
         Ok(len)
+    }
+
+    fn check_parents(&self, rel: &[u8]) -> Result<()> {
+        if rel == b"." || rel.is_empty() {
+            return Ok(());
+        }
+        let trimmed = rel.strip_suffix(b"/").unwrap_or(rel);
+        let mut path = [0u16; MAX_WPATH];
+        path[..self.root_len].copy_from_slice(&self.root[..self.root_len]);
+        let mut len = self.root_len;
+        let mut start = 0usize;
+        let mut index = 0usize;
+        while index <= trimmed.len() {
+            if index == trimmed.len() || trimmed[index] == b'/' || trimmed[index] == b'\\' {
+                let segment = &trimmed[start..index];
+                start = index + 1;
+                if index == trimmed.len() || segment.is_empty() {
+                    break;
+                }
+                if len > 0 {
+                    path[len] = b'\\' as u16;
+                    len += 1;
+                }
+                let converted = unsafe {
+                    MultiByteToWideChar(
+                        CP_UTF8,
+                        0,
+                        segment.as_ptr(),
+                        segment.len() as i32,
+                        path[len..].as_mut_ptr(),
+                        (MAX_WPATH - len - 1) as i32,
+                    )
+                };
+                if converted <= 0 || len + converted as usize + 1 >= path.len() {
+                    return Err(Error::InvalidInput);
+                }
+                len += converted as usize;
+                path[len] = 0;
+                let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
+                if attributes == INVALID_FILE_ATTRIBUTES {
+                    return Err(Self::last_error());
+                }
+                if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                    return Err(Error::PermissionDenied);
+                }
+            }
+            index += 1;
+        }
+        Ok(())
     }
 
     fn open_handle(
@@ -565,6 +616,7 @@ impl Platform for Sys {
     }
 
     fn open(&mut self, path: &[u8]) -> Result<Self::File> {
+        self.check_parents(path)?;
         let handle = self.open_handle(
             path,
             GENERIC_READ,
@@ -636,6 +688,7 @@ impl Platform for Sys {
     }
 
     fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir> {
+        self.check_parents(path)?;
         let check = self.open_handle(
             path,
             GENERIC_READ,
@@ -719,6 +772,7 @@ impl Platform for Sys {
     }
 
     fn create_file(&mut self, path: &[u8], replace: bool) -> Result<Self::File> {
+        self.check_parents(path)?;
         let creation = if replace { CREATE_ALWAYS } else { CREATE_NEW };
         let handle = self.open_handle(path, GENERIC_WRITE, creation, FILE_ATTRIBUTE_NORMAL)?;
         Ok(File::new(handle))
@@ -743,6 +797,7 @@ impl Platform for Sys {
     }
 
     fn create_dir(&mut self, path: &[u8]) -> Result<()> {
+        self.check_parents(path)?;
         let mut full = [0u16; MAX_WPATH];
         self.root_path(path, &mut full)?;
         if unsafe { CreateDirectoryW(full.as_ptr(), null_mut()) } == 0 {
@@ -752,6 +807,7 @@ impl Platform for Sys {
     }
 
     fn remove_file(&mut self, path: &[u8]) -> Result<()> {
+        self.check_parents(path)?;
         let mut full = [0u16; MAX_WPATH];
         self.root_path(path, &mut full)?;
         if unsafe { DeleteFileW(full.as_ptr()) } == 0 {

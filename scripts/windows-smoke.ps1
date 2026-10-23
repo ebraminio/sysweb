@@ -39,8 +39,9 @@ try {
         $leak = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$Port/link/secret.txt"
         if ($leak.StatusCode -eq 200) { throw "junction escaped the root" }
     } catch {
-        if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 200) {
-            throw "junction escaped the root"
+        $code = $_.Exception.Response.StatusCode.value__
+        if ($code -ne 403) {
+            throw "junction returned $code, expected 403"
         }
     }
 
