@@ -477,6 +477,11 @@ reviewable.
 
 ## Async design (milestone 1)
 
+Backend status: Linux uses epoll, macOS uses kqueue, and both run the same
+fixed-slot state machine. io_uring has a prototype but is not enabled; the
+Windows IOCP spike proves `AcceptEx`/`WSARecv`/`WSASend`, but the full Win32
+backend is not implemented.
+
 The async path is now the default on Unix: epoll (Linux) or kqueue (macOS)
 readiness, non-blocking accept/read/write/sendfile, and a fixed-slot
 GET/HEAD/PUT/POST state machine. Metadata and listings remain synchronous.
