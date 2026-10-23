@@ -118,6 +118,7 @@ fn request(port: u16, raw: &[u8]) -> Vec<u8> {
         .set_read_timeout(Some(Duration::from_secs(5)))
         .expect("read timeout");
     stream.write_all(raw).expect("write request");
+    let _ = stream.shutdown(std::net::Shutdown::Write);
     let mut response = Vec::new();
     stream.read_to_end(&mut response).expect("read response");
     response
@@ -136,6 +137,7 @@ fn request_split(port: u16, head: &str, body: &[u8]) -> Vec<u8> {
     stream.write_all(head.as_bytes()).expect("headers");
     std::thread::sleep(Duration::from_millis(50));
     stream.write_all(body).expect("body");
+    let _ = stream.shutdown(std::net::Shutdown::Write);
     let mut response = Vec::new();
     stream.read_to_end(&mut response).expect("read response");
     response
@@ -200,6 +202,26 @@ fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
         let (key, value) = line.split_once(':')?;
         key.eq_ignore_ascii_case(name).then(|| value.trim())
     })
+}
+
+fn read_one_response(stream: &mut TcpStream) -> Vec<u8> {
+    let mut response = Vec::new();
+    let mut byte = [0u8; 1];
+    while !response.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).expect("response header");
+        response.push(byte[0]);
+    }
+    let head = String::from_utf8_lossy(&response).into_owned();
+    let length = header(&head, "Content-Length")
+        .expect("content length")
+        .parse::<usize>()
+        .expect("content length number");
+    let start = response.len();
+    response.resize(start + length, 0);
+    stream
+        .read_exact(&mut response[start..])
+        .expect("response body");
+    response
 }
 
 fn assert_status(head: &str, expected: &str) {
@@ -548,7 +570,7 @@ fn uploads_create_files_and_directories() {
         .expect("timeout");
     stream
         .write_all(
-            b"PUT /assets/expect.txt HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n",
+            b"PUT /assets/expect.txt HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n",
         )
         .expect("headers");
     let mut interim = [0u8; 64];
@@ -652,7 +674,7 @@ fn multipart_forms_work_for_old_browsers() {
         .set_read_timeout(Some(Duration::from_secs(5)))
         .expect("timeout");
     let headers = format!(
-        "POST /assets/ HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=----expectform\r\nContent-Length: {}\r\nExpect: 100-continue\r\n\r\n",
+        "POST /assets/ HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=----expectform\r\nContent-Length: {}\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(headers.as_bytes()).expect("headers");
@@ -854,4 +876,122 @@ fn async_concurrent_gets_fill_all_slots() {
     for client in clients {
         client.join().expect("client thread");
     }
+}
+
+#[test]
+fn http11_keep_alive_reuses_one_connection() {
+    let server = start_server(&[]);
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("read timeout");
+    stream
+        .write_all(b"GET /hello%20world.txt HTTP/1.1\r\nHost: x\r\n\r\n")
+        .expect("first request");
+    let first = read_one_response(&mut stream);
+    let (head, body) = split(&first);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(header(&head, "Connection"), Some("keep-alive"));
+    assert_eq!(body, b"hello, space");
+
+    stream
+        .write_all(b"GET /app.js HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        .expect("second request");
+    let second = read_one_response(&mut stream);
+    let (head, body) = split(&second);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(header(&head, "Connection"), Some("close"));
+    assert_eq!(body, b"console.log('hi')");
+    let mut extra = [0u8; 1];
+    assert_eq!(stream.read(&mut extra).expect("close read"), 0);
+}
+
+#[test]
+fn pipelined_requests_keep_order_and_leftover_bytes() {
+    let server = start_server(&[]);
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("read timeout");
+    stream
+        .write_all(
+            b"GET /hello%20world.txt HTTP/1.1\r\nHost: x\r\n\r\nGET /app.js HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        )
+        .expect("pipeline");
+    let first = read_one_response(&mut stream);
+    let (head, body) = split(&first);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"hello, space");
+    let second = read_one_response(&mut stream);
+    let (head, body) = split(&second);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(header(&head, "Connection"), Some("close"));
+    assert_eq!(body, b"console.log('hi')");
+}
+
+#[test]
+fn http10_defaults_to_close_and_honors_keep_alive() {
+    let server = start_server(&[]);
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).expect("connect");
+    stream
+        .write_all(b"GET /hello%20world.txt HTTP/1.0\r\nHost: x\r\n\r\n")
+        .expect("http10");
+    let response = read_one_response(&mut stream);
+    let (head, _) = split(&response);
+    assert_eq!(header(&head, "Connection"), Some("close"));
+
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).expect("connect");
+    stream
+        .write_all(b"GET /hello%20world.txt HTTP/1.0\r\nHost: x\r\nConnection: keep-alive\r\n\r\n")
+        .expect("http10 keepalive");
+    let response = read_one_response(&mut stream);
+    let (head, _) = split(&response);
+    assert_eq!(header(&head, "Connection"), Some("keep-alive"));
+}
+
+#[test]
+fn upload_then_get_on_the_same_connection() {
+    let server = start_server(&["--upload"]);
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("read timeout");
+    stream
+        .write_all(
+            b"PUT /same-connection.txt HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello",
+        )
+        .expect("put");
+    let response = read_one_response(&mut stream);
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 201 Created");
+    assert_eq!(body, b"UPLOADED\n");
+
+    stream
+        .write_all(b"GET /same-connection.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        .expect("get");
+    let response = read_one_response(&mut stream);
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(body, b"hello");
+}
+
+#[test]
+fn keep_alive_idle_timeout_closes_between_requests() {
+    let server = start_server(&["--idle-timeout", "1"]);
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("read timeout");
+    stream
+        .write_all(b"GET /hello%20world.txt HTTP/1.1\r\nHost: x\r\n\r\n")
+        .expect("request");
+    let response = read_one_response(&mut stream);
+    assert_status(&split(&response).0, "HTTP/1.1 200 OK");
+
+    std::thread::sleep(Duration::from_millis(1500));
+    let mut byte = [0u8; 1];
+    assert_eq!(stream.read(&mut byte).expect("idle read"), 0);
+
+    let response = get(server.port, "/");
+    assert_status(&split(&response).0, "HTTP/1.1 200 OK");
 }

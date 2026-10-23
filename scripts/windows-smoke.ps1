@@ -4,6 +4,35 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Read-HttpResponse($stream) {
+    $bytes = New-Object System.Collections.Generic.List[byte]
+    $one = New-Object byte[] 1
+    while ($true) {
+        $n = $stream.Read($one, 0, 1)
+        if ($n -le 0) { throw "unexpected EOF in HTTP header" }
+        $bytes.Add($one[0])
+        $count = $bytes.Count
+        if ($count -ge 4 -and
+            $bytes[$count - 4] -eq 13 -and $bytes[$count - 3] -eq 10 -and
+            $bytes[$count - 2] -eq 13 -and $bytes[$count - 1] -eq 10) {
+            break
+        }
+    }
+    $head = [Text.Encoding]::ASCII.GetString($bytes.ToArray())
+    if ($head -notmatch '(?im)^Content-Length:\s*(\d+)') {
+        throw "missing Content-Length"
+    }
+    $length = [int]$Matches[1]
+    $body = New-Object byte[] $length
+    $offset = 0
+    while ($offset -lt $length) {
+        $n = $stream.Read($body, $offset, $length - $offset)
+        if ($n -le 0) { throw "unexpected EOF in HTTP body" }
+        $offset += $n
+    }
+    [pscustomobject]@{ Head = $head; Body = $body }
+}
 $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
 $root = Join-Path $base "sysweb-win-root"
 $outside = Join-Path $base "sysweb-win-outside"
@@ -21,6 +50,19 @@ try {
     if ($response.StatusCode -ne 200 -or $response.Content -ne "windows smoke") {
         throw "GET failed"
     }
+
+    $ka = [System.Net.Sockets.TcpClient]::new("127.0.0.1", $Port)
+    $kaStream = $ka.GetStream()
+    $kaStream.ReadTimeout = 5000
+    $first = [Text.Encoding]::ASCII.GetBytes("GET /hello.txt HTTP/1.1`r`nHost: x`r`n`r`n")
+    $kaStream.Write($first, 0, $first.Length)
+    $r1 = Read-HttpResponse $kaStream
+    if ($r1.Head -notmatch 'Connection: keep-alive') { throw "keep-alive response header missing" }
+    $second = [Text.Encoding]::ASCII.GetBytes("GET /hello.txt HTTP/1.1`r`nHost: x`r`nConnection: close`r`n`r`n")
+    $kaStream.Write($second, 0, $second.Length)
+    $r2 = Read-HttpResponse $kaStream
+    if ($r2.Head -notmatch 'Connection: close') { throw "close response header missing" }
+    $ka.Close()
 
     $put = Invoke-WebRequest -UseBasicParsing -Method Put -Body "put smoke" `
         "http://127.0.0.1:$Port/put.txt"

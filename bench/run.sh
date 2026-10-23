@@ -84,7 +84,7 @@ echo "sysweb benchmark (localhost, page cache, no TLS)"
 echo "client: $(uname -sm), $(sysctl -n hw.ncpu 2>/dev/null || nproc) CPUs"
 echo
 
-echo "--- keep-alive, wrk -t2 -c8 -d3s (sysweb closes; nginx/caddy reuse) ---"
+echo "--- keep-alive, wrk -t2 -c8 -d3s (all servers reuse connections) ---"
 for size in 1k 64k 1m; do
     for item in "sysweb:$port_sysweb" "nginx:$port_nginx" "caddy:$port_caddy"; do
         name=${item%%:*}

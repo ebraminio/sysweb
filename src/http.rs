@@ -43,12 +43,30 @@ pub enum RangeSpec {
     Suffix(u64),
 }
 
+/// The connection persistence requested by the client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Connection {
+    Default,
+    KeepAlive,
+    Close,
+}
+
+impl Connection {
+    pub const fn keep_alive_for(self, version: Version) -> bool {
+        match version {
+            Version::Http11 => !matches!(self, Connection::Close),
+            Version::Http10 => matches!(self, Connection::KeepAlive),
+        }
+    }
+}
+
 /// A parsed request line plus the headers the server interprets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Request<'a> {
     pub method: Method,
     pub target: &'a [u8],
     pub version: Version,
+    pub connection: Connection,
     pub content_length: Option<u64>,
     pub content_type: Option<&'a [u8]>,
     pub range: Option<RangeSpec>,
@@ -115,6 +133,7 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
     let mut content_type = None;
     let mut range = None;
     let mut expect_continue = false;
+    let mut connection = Connection::Default;
     if line_end + 2 <= head.len() {
         for header_line in head[line_end + 2..].split(|&b| b == b'\n') {
             let header_line = header_line.strip_suffix(b"\r").unwrap_or(header_line);
@@ -144,6 +163,17 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
                 range = parse_range(value);
             } else if name.eq_ignore_ascii_case(b"expect") {
                 expect_continue = value.eq_ignore_ascii_case(b"100-continue");
+            } else if name.eq_ignore_ascii_case(b"connection") {
+                for token in value.split(|&byte| byte == b',') {
+                    let token = trim(token);
+                    if token.eq_ignore_ascii_case(b"close") {
+                        connection = Connection::Close;
+                    } else if token.eq_ignore_ascii_case(b"keep-alive")
+                        && connection != Connection::Close
+                    {
+                        connection = Connection::KeepAlive;
+                    }
+                }
             }
         }
     }
@@ -152,6 +182,7 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
         method,
         target,
         version,
+        connection,
         content_length,
         content_type,
         range,
@@ -310,7 +341,7 @@ impl Status {
 
 #[cfg(test)]
 mod tests {
-    use super::{header_end, parse, Method, ParseError, RangeSpec, Status, Version};
+    use super::{header_end, parse, Connection, Method, ParseError, RangeSpec, Status, Version};
 
     #[test]
     fn finds_header_end() {
@@ -333,6 +364,22 @@ mod tests {
         let r = parse(b"HEAD / HTTP/1.0\r\n\r\n").unwrap();
         assert_eq!(r.method, Method::Head);
         assert_eq!(r.version, Version::Http10);
+    }
+
+    #[test]
+    fn parses_connection_persistence() {
+        let r = parse(b"GET / HTTP/1.1\r\n\r\n").unwrap();
+        assert_eq!(r.connection, Connection::Default);
+        assert!(r.connection.keep_alive_for(r.version));
+
+        let r = parse(b"GET / HTTP/1.1\r\nConnection: close\r\n\r\n").unwrap();
+        assert!(!r.connection.keep_alive_for(r.version));
+
+        let r = parse(b"GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n").unwrap();
+        assert!(r.connection.keep_alive_for(r.version));
+
+        let r = parse(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+        assert!(!r.connection.keep_alive_for(r.version));
     }
 
     #[test]

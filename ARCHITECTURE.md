@@ -139,8 +139,8 @@ Design notes:
   with a timer/deadline and remove it if no blocking backend remains.
   Fatal listener errors still terminate; there is no supervisor yet.
 - **Size budget.** Binary size is a design constraint, not an afterthought.
-  CI and the release workflow enforce 112 KiB on macOS arm64, 64 KiB on Linux
-  x86_64, and 72 KiB on Linux aarch64 via `scripts/check-size.sh`; changing a
+  CI and the release workflow enforce 120 KiB on macOS arm64, 80 KiB on Linux
+  x86_64, and 76 KiB on Linux aarch64 via `scripts/check-size.sh`; changing a
   budget is a deliberate change, not a silent regression.
 
 ## Linux backend
@@ -323,11 +323,14 @@ allocator.
    answered with an interim `100 Continue` before the socket is read.
 9. The response header is built in a 4 KiB `FixedBuf`: status line, `Server`,
    `Content-Type`, `Content-Length`, optional `Allow`/`Location`, and
-   `Connection: close`.
-10. `Connection: close`: the stream is dropped, closing the fd. There is no
-    keep-alive state yet. If a rejected request announced a small body, it is
-    drained (up to 64 KiB) first: closing with unread input can turn the final
-    FIN into an RST on macOS and discard the response the client is reading.
+   `Connection: keep-alive` or `close`.
+10. With keep-alive, per-request fields are reset, bytes after the consumed
+    body are preserved for a pipelined request, and read interest is restored;
+    after a cap of 1000 requests, or on `Connection: close`/error, the stream is
+    dropped. The `--blocking` path still closes after one request. If a
+    rejected request announced a small body, it is drained (up to 64 KiB)
+    first: closing with unread input can turn the final FIN into an RST on
+    macOS and discard the response the client is reading.
 
 The HTTP, path, MIME, config, and listing modules are exercised by unit tests
 with `std` enabled; the library itself is `no_std` whenever it is not compiled
@@ -677,5 +680,5 @@ several.
   truncated visibly. A pagination or chunked-listing design is future work.
 - **No `Date` header**: HTTP/1.1 says servers SHOULD send one. It is a roadmap
   item because it needs a clock syscall and civil-date conversion.
-- **No keep-alive**: every response costs a TCP handshake. Acceptable for a
-  small dev server, not for a CDN edge.
+- **Keep-alive is capped**: the async path closes after 1000 requests on one
+  connection; the blocking fallback does not reuse connections.

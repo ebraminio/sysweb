@@ -703,6 +703,7 @@ impl<P: Platform> Server<P> {
                 None
             },
             true,
+            false,
         ) {
             let _ = self.send_fallback(stream);
             return None;
@@ -736,6 +737,7 @@ impl<P: Platform> Server<P> {
             None,
             Some(content_range.as_slice()),
             true,
+            false,
         ) {
             let _ = self.send_fallback(stream);
             return;
@@ -788,6 +790,7 @@ impl<P: Platform> Server<P> {
             allow,
             location,
             None,
+            false,
             false,
         ) {
             let _ = self.send_fallback(stream);
@@ -1143,6 +1146,7 @@ pub(crate) fn build_header(
     location: Option<&[u8]>,
     content_range: Option<&[u8]>,
     accept_ranges: bool,
+    keep_alive: bool,
 ) -> bool {
     buffer.clear();
     if !buffer.push(b"HTTP/1.1 ")
@@ -1183,5 +1187,9 @@ pub(crate) fn build_header(
         }
     }
 
-    buffer.push(b"Connection: close\r\n\r\n")
+    if keep_alive {
+        buffer.push(b"Connection: keep-alive\r\n\r\n")
+    } else {
+        buffer.push(b"Connection: close\r\n\r\n")
+    }
 }

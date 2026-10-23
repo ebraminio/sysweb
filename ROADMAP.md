@@ -51,7 +51,7 @@ The current release (milestone 0.5).
       with tarballs and SHA-256 checksums.
 - [x] Transient `accept` failures retry with a 100 ms backoff instead of
       exiting; a stalled service is acceptable, a permanent exit is not.
-- [x] Enforced binary-size budgets: 112 KiB macOS arm64, 64 KiB x86_64, 72 KiB aarch64
+- [x] Enforced binary-size budgets: 120 KiB macOS arm64, 80 KiB x86_64, 76 KiB aarch64
       target.
 - [x] `cargo-fuzz` targets for HTTP/path/multipart plus a black-box
       containment/hang/crash test in `tests/security.rs`.
@@ -62,9 +62,8 @@ The current release (milestone 0.5).
       imports; 57,488-byte (x86_64) and 66,248-byte (aarch64) static Linux ELFs
       with no dynamic section.
 
-**Known gaps:** single-threaded blocking, no timeouts, no keep-alive, no `Date`,
-no multi-range/`If-Range`, no auth/delete/rename, classic forms accept one file,
-macOS Intel unsupported, no Windows backend.
+**Known gaps:** no `Date`, no multi-range/`If-Range`, no auth/delete/rename,
+classic forms accept one file, macOS Intel unsupported.
 Minimums are Linux 5.6+, macOS 11+, and Windows 10 1809+; there are no legacy
 fallbacks.
 
@@ -270,7 +269,7 @@ Every milestone must preserve:
    `thread_local!` items are rejected; the fixed-buffer design passes state
    explicitly. This also keeps read-only sections mergeable into `.text`.
 7. **Small binaries.** Release binaries stay within the checked budgets
-   (112 KiB macOS arm64, 64 KiB x86_64, 72 KiB aarch64); growth is a deliberate
+   (120 KiB macOS arm64, 80 KiB x86_64, 76 KiB aarch64); growth is a deliberate
    decision, not a silent regression.
 
 ## Open questions

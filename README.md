@@ -24,12 +24,11 @@ runtime, no heap, and, on Linux, no libc at all.
 - **binary size is a first-class design goal** — release budgets are checked in
   CI, not just measured after the fact.
 
-> Status: **milestone 0.5** — blocking, single-threaded. Static files,
-> built-in directory indexes, opt-in raw `PUT` uploads, classic
-> `multipart/form-data` form uploads for old/no-JavaScript browsers, folder
-> creation, `sendfile` file serving, single-range HTTP 206/416 responses,
-> HTTP/1.0 and 1.1, `Connection: close`.
-> The async reactor is the next milestone; see [ROADMAP.md](ROADMAP.md).
+> Status: async default on Linux, macOS, and Windows. Static files, built-in
+> directory indexes, opt-in raw `PUT` uploads, classic `multipart/form-data`
+> form uploads for old/no-JavaScript browsers, folder creation, `sendfile` file
+> serving, single-range HTTP 206/416 responses, HTTP/1.0/1.1 keep-alive and
+> close. The Windows backend uses `WSAPoll`; IOCP and io_uring remain roadmap.
 
 ## Why
 
@@ -210,7 +209,8 @@ only when you mean it; this server has no TLS, authentication, or rate limiting.
 ## Features
 
 - HTTP/1.0 and HTTP/1.1 request lines; `GET`, `HEAD`, and (opt-in) `PUT`;
-- static files, `Content-Length`, `Content-Type`, `Connection: close`;
+- static files, `Content-Length`, `Content-Type`, HTTP/1.1 keep-alive
+  (including sequential pipelining), and `Connection: close`;
 - `index.html` is served when present; otherwise a built-in directory index;
 - directory index with names, sizes, modification times, types, breadcrumbs,
   sortable columns, and a parent link;
@@ -285,10 +285,10 @@ Current stripped sizes from this workspace:
 
 | Target | Size | Budget |
 | --- | ---: | ---: |
-| macOS arm64 | 101,008 B | 112 KiB |
+| macOS arm64 | 117,664 B | 120 KiB |
 | Linux x86_64 | 76,192 B | 80 KiB |
-| Linux aarch64 | 74,384 B | 76 KiB |
-| Windows x86_64 | 71,168 B | 96 KiB |
+| Linux aarch64 | 77,200 B | 76 KiB |
+| Windows x86_64 | 75,776 B | 96 KiB |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
 workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and
@@ -396,7 +396,8 @@ This is a milestone, not a hardened internet-facing server:
 - stress/load testing is deliberately scheduled after the async reactor. The
   current suites target crashes, resets, containment, and liveness, not
   throughput or latency under concurrency;
-- `Connection: close` only; no keep-alive or pipelining;
+- async keep-alive handles sequential requests and pipelined bytes; the
+  `--blocking` fallback still serves one request per connection;
 - the async reactor is the default on Unix; `--blocking` keeps the old path.
   GET/HEAD/PUT/POST use non-blocking sockets, while metadata and listing work
   remain synchronous. Idle connections are closed after roughly 30 seconds;
@@ -434,7 +435,7 @@ The next milestone is the async reactor abstraction:
 - non-blocking sockets, a hand-written connection state machine, fixed
   per-connection buffers, no futures executor;
 - uploads integrated into the state machine; directory listing stays bounded;
-- timeouts, keep-alive, connection limits;
+- connection limits and per-connection request caps;
 - Windows IOCP backend; the no-CRT entry/link spike is already done;
 - conditional requests, multi-range, delete/rename, auth, CORS, prefix;
 - `splice`/io_uring zero-copy paths beyond `sendfile`;

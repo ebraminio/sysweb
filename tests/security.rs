@@ -89,7 +89,9 @@ fn request(port: u16, target: &str) -> Vec<u8> {
         .set_read_timeout(Some(Duration::from_secs(2)))
         .expect("timeout");
     stream
-        .write_all(format!("GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+        .write_all(
+            format!("GET {target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
         .expect("write");
     let mut response = Vec::new();
     stream

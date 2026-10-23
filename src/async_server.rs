@@ -27,6 +27,7 @@ const CONTINUE: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
 const UPLOADED: &[u8] = b"UPLOADED\n";
 const CREATED: &[u8] = b"CREATED\n";
 const ALLOW_READ: &[u8] = b"GET, HEAD";
+const MAX_REQUESTS_PER_CONNECTION: u32 = 1000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
@@ -163,6 +164,9 @@ struct Slot<P: AsyncPlatform> {
     log_path: [u8; MAX_URL_PATH],
     log_path_len: usize,
     log_len: u64,
+    keep_alive: bool,
+    requests: u32,
+    body_end: usize,
 }
 
 impl<P: AsyncPlatform> Slot<P> {
@@ -190,6 +194,9 @@ impl<P: AsyncPlatform> Slot<P> {
             log_path: [0; MAX_URL_PATH],
             log_path_len: 0,
             log_len: 0,
+            keep_alive: false,
+            requests: 0,
+            body_end: 0,
         }
     }
 
@@ -212,6 +219,9 @@ impl<P: AsyncPlatform> Slot<P> {
         self.idle_ticks = 0;
         self.log_path_len = 0;
         self.log_len = 0;
+        self.keep_alive = false;
+        self.requests = 0;
+        self.body_end = 0;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -236,6 +246,7 @@ impl<P: AsyncPlatform> Slot<P> {
             location,
             content_range,
             accept_ranges,
+            self.keep_alive && self.requests + 1 < MAX_REQUESTS_PER_CONNECTION,
         ) {
             return false;
         }
@@ -261,6 +272,7 @@ impl<P: AsyncPlatform> Slot<P> {
     }
 
     fn prepare_error_allow(&mut self, status: Status, head_only: bool, allow: &[u8]) {
+        self.keep_alive = false;
         let body = status.error_body();
         self.log_len = body.len() as u64;
         let mut header = FixedBuf::<HEADER_BUF>::new();
@@ -272,6 +284,7 @@ impl<P: AsyncPlatform> Slot<P> {
             allow,
             None,
             None,
+            false,
             false,
         ) {
             return;
@@ -291,6 +304,7 @@ impl<P: AsyncPlatform> Slot<P> {
     }
 
     fn prepare_error(&mut self, status: Status, head_only: bool) {
+        self.keep_alive = false;
         let body = status.error_body();
         self.log_len = body.len() as u64;
         let _ = self.prepare_response(
@@ -468,8 +482,10 @@ fn handle_event<P: AsyncPlatform>(
     slots[index].quiet = config.quiet();
     match slots[index].state {
         State::Reading => read_slot(platform, poller, config, &mut slots[index], index + 1),
-        State::Writing => write_slot(platform, poller, &mut slots[index], index + 1),
-        State::SendingFile => send_file_slot(platform, poller, &mut slots[index], index + 1),
+        State::Writing => write_slot(platform, poller, config, &mut slots[index], index + 1),
+        State::SendingFile => {
+            send_file_slot(platform, poller, config, &mut slots[index], index + 1)
+        }
         State::SendingContinue => {
             write_continue_slot(platform, poller, &mut slots[index], index + 1)
         }
@@ -544,6 +560,10 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
     let content_length = request.content_length;
     let expect_continue = request.expect_continue;
     let body_offset = request.body_offset;
+    let body_len = content_length.unwrap_or(0).min(usize::MAX as u64) as usize;
+    slot.body_end = body_offset.saturating_add(body_len).min(slot.request_len);
+    slot.keep_alive = request.connection.keep_alive_for(request.version)
+        && !(matches!(method, Method::Get | Method::Head) && content_length.unwrap_or(0) > 0);
     let mut content_type = [0u8; 256];
     let mut content_type_len = 0usize;
     if let Some(value) = request.content_type {
@@ -1268,6 +1288,7 @@ fn prepare_file<P: AsyncPlatform>(
 fn write_slot<P: AsyncPlatform>(
     platform: &mut P,
     poller: &mut P::Poller,
+    config: &Config,
     slot: &mut Slot<P>,
     token: usize,
 ) {
@@ -1309,13 +1330,14 @@ fn write_slot<P: AsyncPlatform>(
             close_slot(platform, poller, slot, token);
         }
     } else {
-        close_slot(platform, poller, slot, token);
+        finish_response(platform, poller, config, slot, token);
     }
 }
 
 fn send_file_slot<P: AsyncPlatform>(
     platform: &mut P,
     poller: &mut P::Poller,
+    config: &Config,
     slot: &mut Slot<P>,
     token: usize,
 ) {
@@ -1340,7 +1362,7 @@ fn send_file_slot<P: AsyncPlatform>(
                 slot.file_offset += count;
                 slot.file_remaining -= count;
                 if slot.file_remaining == 0 {
-                    close_slot(platform, poller, slot, token);
+                    finish_response(platform, poller, config, slot, token);
                     return;
                 }
             }
@@ -1386,6 +1408,72 @@ fn drain_slot<P: AsyncPlatform>(
     }
 }
 
+fn finish_response<P: AsyncPlatform>(
+    platform: &mut P,
+    poller: &mut P::Poller,
+    config: &Config,
+    slot: &mut Slot<P>,
+    token: usize,
+) {
+    log_slot(platform, slot);
+    slot.log_path_len = 0;
+    if !slot.keep_alive || slot.requests + 1 >= MAX_REQUESTS_PER_CONNECTION {
+        close_slot(platform, poller, slot, token);
+        return;
+    }
+    slot.requests += 1;
+    let consumed = slot.body_end.min(slot.request_len);
+    if consumed > 0 && consumed < slot.request_len {
+        slot.request.copy_within(consumed..slot.request_len, 0);
+    }
+    slot.request_len -= consumed;
+    slot.file = None;
+    slot.upload = None;
+    slot.response_len = 0;
+    slot.response_pos = 0;
+    slot.file_offset = 0;
+    slot.file_remaining = 0;
+    slot.drain_remaining = 0;
+    slot.continue_pos = 0;
+    slot.head_only = false;
+    slot.status = Status::Ok;
+    slot.keep_alive = false;
+    slot.body_end = 0;
+    slot.idle_ticks = 0;
+    slot.state = State::Reading;
+
+    if slot.request_len > 0 && http::header_end(&slot.request[..slot.request_len]).is_some() {
+        prepare_request(platform, config, slot);
+        transition(platform, poller, slot, token);
+        return;
+    }
+    let Some(stream) = slot.stream.as_ref() else {
+        return;
+    };
+    if platform
+        .set_interest(poller, stream, token, Interest::Readable)
+        .is_err()
+    {
+        close_slot(platform, poller, slot, token);
+    }
+}
+
+fn log_slot<P: AsyncPlatform>(platform: &mut P, slot: &Slot<P>) {
+    if slot.quiet || slot.log_path_len == 0 {
+        return;
+    }
+    let mut line = FixedBuf::<1200>::new();
+    let _ = line.push(slot.log_method.as_bytes());
+    let _ = line.push_byte(b' ');
+    let _ = line.push(&slot.log_path[..slot.log_path_len]);
+    let _ = line.push_byte(b' ');
+    let _ = line.push_u64(slot.status.code() as u64);
+    let _ = line.push_byte(b' ');
+    let _ = line.push_u64(slot.log_len);
+    let _ = line.push_byte(b'\n');
+    platform.log(line.as_slice());
+}
+
 fn transition<P: AsyncPlatform>(
     platform: &mut P,
     poller: &mut P::Poller,
@@ -1425,18 +1513,7 @@ fn close_slot<P: AsyncPlatform>(
     token: usize,
 ) {
     abort_upload(platform, slot);
-    if !slot.quiet && slot.log_path_len > 0 {
-        let mut line = FixedBuf::<1200>::new();
-        let _ = line.push(slot.log_method.as_bytes());
-        let _ = line.push_byte(b' ');
-        let _ = line.push(&slot.log_path[..slot.log_path_len]);
-        let _ = line.push_byte(b' ');
-        let _ = line.push_u64(slot.status.code() as u64);
-        let _ = line.push_byte(b' ');
-        let _ = line.push_u64(slot.log_len);
-        let _ = line.push_byte(b'\n');
-        platform.log(line.as_slice());
-    }
+    log_slot(platform, slot);
     if let Some(stream) = slot.stream.as_ref() {
         let _ = platform.deregister_stream(poller, stream, token);
     }
@@ -1448,4 +1525,7 @@ fn close_slot<P: AsyncPlatform>(
     slot.response_pos = 0;
     slot.file_offset = 0;
     slot.file_remaining = 0;
+    slot.keep_alive = false;
+    slot.requests = 0;
+    slot.body_end = 0;
 }

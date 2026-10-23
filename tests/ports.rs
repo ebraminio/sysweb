@@ -49,7 +49,7 @@ fn get(port: u16) -> Option<Vec<u8>> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     stream
-        .write_all(b"GET /ok.txt HTTP/1.1\r\nHost: x\r\n\r\n")
+        .write_all(b"GET /ok.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
         .ok()?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response).ok()?;

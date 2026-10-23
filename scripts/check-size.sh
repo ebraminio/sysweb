@@ -15,7 +15,7 @@ os="$(uname -s)"
 arch="$(uname -m)"
 case "$os/$arch" in
 Darwin/arm64)
-    budget=114688 # 112 KiB
+    budget=122880 # 120 KiB; keep-alive and interface discovery included
     ;;
 Linux/x86_64)
     budget=81920 # 80 KiB; the async reactor is included in the main binary
