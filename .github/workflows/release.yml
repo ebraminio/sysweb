@@ -84,6 +84,7 @@ jobs:
         shell: bash
         run: |
           set -eu
+          mkdir -p dist
           short="${GITHUB_SHA:0:12}"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
             asset="sysweb-${short}-${{ matrix.platform }}.exe"
