@@ -9,9 +9,9 @@ its constraints; please read this before sending a patch.
    or a dependency that requires them in the server binary.
 2. **No third-party runtime crates.** The binary should keep `cargo tree` at a
    single node. Test-only tooling is a discussion, not a default.
-3. **Latest APIs only.** Do not add compatibility fallbacks for older kernels
-   or OS releases. Linux targets `openat2`/`statx`/io_uring, macOS targets
-   `O_NOFOLLOW_ANY`/kqueue, Windows targets IOCP. See the policy in
+3. **Latest readiness APIs.** Do not add compatibility fallbacks for older
+   kernels or OS releases. Linux uses `openat2`/`statx`/epoll, macOS uses
+   `O_NOFOLLOW_ANY`/kqueue, and Windows uses `WSAPoll`. See the policy in
    [ARCHITECTURE.md](ARCHITECTURE.md).
 4. **`unsafe` stays at the edges.** New `unsafe` belongs in a syscall/ABI or
    entry module, with a comment stating the invariant. Safe HTTP/path code
@@ -85,8 +85,7 @@ response header, update the 4 KiB header budget and the e2e assertions.
 Directory pages fit in 64 KiB; if a change can exceed that, add truncation
 behavior and a test.
 
-Uploads deserve extra care: require `Content-Length`, enforce the cap, stream
-in fixed chunks, unlink partial files, and keep the feature behind `--upload`.
+Uploads deserve extra care: require `Content-Length`, stream in fixed chunks, unlink partial files, and keep the feature behind `--upload`.
 The multipart parser must stay incremental: never buffer a whole body, add
 chunk-split tests for every state transition, keep the 32 KiB buffer bound, and
 sanitize filenames before touching the filesystem.
@@ -119,3 +118,101 @@ vulnerability; use the private advisory channel.
 
 By contributing, you agree that your contribution is licensed under the MIT
 license in [LICENSE](LICENSE).
+
+
+## Repository map
+
+```text
+src/bin/syswebd.rs   entry points, panic handler, mem* shims
+src/async_server.rs  fixed-slot async connection state machine
+src/server.rs        shared response/path helpers
+src/http.rs          request parsing
+src/path.rs          target decoding and normalization
+src/listing.rs       compiled-in HTML/CSS/JS directory page
+src/multipart.rs     streaming multipart parser
+src/mime.rs          static extension table
+src/config.rs        no-alloc command-line parser
+src/platform/        Platform and AsyncPlatform traits; OS backends
+tests/e2e.rs         real-process HTTP tests
+tests/ports.rs       port selection tests
+tests/security.rs    adversarial black-box tests (Unix)
+fuzz/                cargo-fuzz targets
+spikes/              isolated ABI experiments
+bench/               localhost, Pi, and stress measurements
+```
+
+## Size budgets
+
+Current hard caps:
+
+| Target | Budget |
+| --- | ---: |
+| macOS arm64 | 140 KiB |
+| Linux x86_64 | 108 KiB |
+| Linux aarch64 | 104 KiB |
+| Windows x86_64 | 116 KiB |
+
+`scripts/check-size.sh` enforces the Unix budgets. The Windows release job
+checks its own cap. A budget change must be deliberate and documented.
+
+## Async model
+
+There is one server path: a single-threaded readiness reactor over epoll,
+kqueue, or WSAPoll. Connections occupy fixed slots; there is no executor and no
+`async`/`await`. That is intentional: it maps directly to the syscalls, avoids
+future boxing/pinning, and keeps every per-connection buffer fixed.
+
+Keep-alive, sequential pipelining, uploads, and classic-form redirects live in
+this state machine. `TCP_NODELAY` is set on accepted streams; Linux uses
+`accept4(SOCK_NONBLOCK)`. The blocking server, `Platform::sleep_ms`, and the
+`--blocking`/`--async` flags were removed.
+
+io_uring and IOCP are not implemented. They are completion-based and would
+require a separate reactor abstraction rather than the current readiness
+interface. See [ROADMAP.md](ROADMAP.md); do not claim them because a spike
+exists.
+
+## HTTP and auth
+
+- HTTP/1.0 defaults to close; HTTP/1.1 defaults to keep-alive.
+- A connection closes after 1000 requests, on error, or on idle timeout.
+- `--userpass user:pass` enables Basic auth on every route. Credentials are
+  decoded on the stack and compared in constant time. It is not TLS.
+- Classic forms return `303 See Other` after success so the listing reloads.
+- Older browsers can use the GET text form; its size is limited by the
+  browser's URL length.
+
+## Releases
+
+Every push creates a per-commit GitHub Release:
+
+- tag `build-<short-sha>`;
+- raw assets with stable names such as `sysweb-linux-x86_64`,
+  `sysweb-linux-aarch64`, `sysweb-macos-arm64`, and
+  `sysweb-windows-x86_64.exe`;
+- the release is marked latest, so `/releases/latest/download/<asset>` works.
+
+CI runs Linux and macOS tests, Linux aarch64 checks, fuzz smoke, Windows build,
+Windows full e2e/port tests, import checks, and the Windows smoke script.
+
+## Benchmarks, spikes, and stress
+
+- `bench/run.sh`: sysweb/nginx/Caddy localhost comparison;
+- `bench/pi/`: Raspberry Pi idle/2 GiB results and CPU sampler;
+- `bench/stress.sh`: high-concurrency sysweb survival/throughput run;
+- `spikes/`: isolated ABI experiments, documented in
+  [spikes/README.md](spikes/README.md).
+
+Benchmarks are single runs unless repeated; state the caveats. Do not turn a
+small-file difference into a feature-parity claim.
+
+## Commits
+
+Incremental commits are preferred. Include:
+
+```text
+Assisted-by: DeepSeek <noreply@deepseek.com>
+```
+
+when an agent contributes. Push as work progresses. Do not wait for CI unless
+the user asks; report the commit and let them report failures.

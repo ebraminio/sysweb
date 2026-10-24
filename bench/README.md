@@ -78,6 +78,23 @@ See [pi/README.md](pi/README.md). Short version: idle CPU is below the
 LAN download, sysweb used 0.58 CPU-seconds (1.19% of one core), nginx 0.15 s,
 and Caddy 3.14 s; throughput was network-bound.
 
+## Stress run
+
+`bench/stress.sh` drives the server with 64 connections (the server has 8
+slots) for 5 seconds, then runs a no-keep-alive `ab` pass and checks that the
+process survives.
+
+One representative macOS run:
+
+| Workload | Throughput | p99 latency |
+| --- | ---: | ---: |
+| 1 KiB, 64 conns | 5,637 req/s | 5.90 ms |
+| 64 KiB, 64 conns | 5,798 req/s | 15.11 ms |
+| 1 KiB, `ab -c8` | 20,055 req/s | — |
+
+The 64-connection numbers are queueing/slot-limited, not a capacity claim.
+The point is that the server stays alive and keeps serving under overload.
+
 ## What to prioritize
 
 1. **Repeatable load scenarios** with slow clients and concurrent
