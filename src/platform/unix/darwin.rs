@@ -16,6 +16,8 @@ const AF_INET: i32 = 2;
 const SOCK_STREAM: i32 = 1;
 const SOL_SOCKET: i32 = 0xffff;
 const SO_REUSEADDR: i32 = 4;
+const IPPROTO_TCP: i32 = 6;
+const TCP_NODELAY: i32 = 1;
 const SO_NOSIGPIPE: i32 = 0x1022;
 const AT_FDCWD: i32 = -2;
 const AT_SYMLINK_NOFOLLOW: i32 = 0x20;
@@ -377,6 +379,16 @@ pub fn interfaces(out: &mut [Interface]) -> Result<usize> {
 /// Darwin's `sendfile` can raise SIGPIPE; set SO_NOSIGPIPE on every accepted
 /// socket instead of touching the process signal mask.
 pub fn configure_stream(fd: i32) -> Result<()> {
+    let one: i32 = 1;
+    cvt(unsafe {
+        c_setsockopt(
+            fd,
+            IPPROTO_TCP,
+            TCP_NODELAY,
+            &one as *const i32 as *const u8,
+            4,
+        )
+    })?;
     let one: i32 = 1;
     cvt(unsafe {
         c_setsockopt(

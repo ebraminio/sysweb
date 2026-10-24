@@ -15,6 +15,7 @@ mod nr {
     pub const CLOSE: usize = 3;
     pub const STATX: usize = 332;
     pub const SOCKET: usize = 41;
+    pub const ACCEPT4: usize = 288;
     pub const IOCTL: usize = 16;
     pub const ACCEPT: usize = 43;
     pub const SENDFILE: usize = 40;
@@ -42,6 +43,7 @@ mod nr {
     pub const CLOSE: usize = 57;
     pub const STATX: usize = 291;
     pub const SOCKET: usize = 198;
+    pub const ACCEPT4: usize = 242;
     pub const IOCTL: usize = 29;
     pub const ACCEPT: usize = 202;
     pub const SENDFILE: usize = 71;
@@ -67,8 +69,11 @@ use nr::*;
 const AF_INET: usize = 2;
 const SOCK_STREAM: usize = 1;
 const SOCK_DGRAM: usize = 2;
+const SOCK_NONBLOCK: usize = 0x800;
 const SOL_SOCKET: usize = 1;
 const SO_REUSEADDR: usize = 2;
+const IPPROTO_TCP: usize = 6;
+const TCP_NODELAY: usize = 1;
 const MSG_NOSIGNAL: usize = 0x4000;
 const SIOCGIFCONF: usize = 0x8912;
 const AT_FDCWD: usize = (-100isize) as usize;
@@ -416,6 +421,16 @@ pub fn accept(fd: i32) -> Result<i32> {
     Ok(decode(result)? as i32)
 }
 
+pub fn accept_nonblocking(fd: i32) -> Result<i32> {
+    let result = unsafe { syscall6(ACCEPT4, fd as usize, 0, 0, SOCK_NONBLOCK, 0, 0) };
+    let stream = decode(result)? as i32;
+    if let Err(error) = configure_stream(stream) {
+        let _ = close(stream);
+        return Err(error);
+    }
+    Ok(stream)
+}
+
 pub fn read(fd: i32, buf: &mut [u8]) -> Result<usize> {
     let result = unsafe {
         syscall6(
@@ -497,11 +512,24 @@ pub fn block_sigpipe() -> Result<()> {
     decode(result).map(|_| ())
 }
 
-pub fn configure_stream(_fd: i32) -> Result<()> {
-    Ok(())
+pub fn configure_stream(fd: i32) -> Result<()> {
+    let one: i32 = 1;
+    let result = unsafe {
+        syscall6(
+            SETSOCKOPT,
+            fd as usize,
+            IPPROTO_TCP,
+            TCP_NODELAY,
+            &one as *const i32 as usize,
+            4,
+            0,
+        )
+    };
+    decode(result).map(|_| ())
 }
 
 pub fn configure_stream_nonblocking(fd: i32) -> Result<()> {
+    configure_stream(fd)?;
     set_nonblocking(fd)
 }
 

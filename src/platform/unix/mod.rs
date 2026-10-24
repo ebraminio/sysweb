@@ -512,6 +512,13 @@ impl AsyncPlatform for Sys {
 
     fn accept_nonblocking(&mut self, listener: &Self::Listener) -> Result<Self::Stream> {
         loop {
+            #[cfg(target_os = "linux")]
+            match abi::accept_nonblocking(listener.fd) {
+                Err(Error::Interrupted) => continue,
+                Ok(fd) => return Ok(Stream { fd }),
+                Err(error) => return Err(error),
+            }
+            #[cfg(target_os = "macos")]
             match abi::accept(listener.fd) {
                 Err(Error::Interrupted) => continue,
                 Ok(fd) => {

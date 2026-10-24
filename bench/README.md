@@ -13,7 +13,8 @@ cache.
 
 Measured on macOS 27.0.1, 10 CPUs, with:
 
-- sysweb: release build, async default, 8 fixed slots, HTTP/1.1 keep-alive
+- sysweb: release build, async default, 8 fixed slots, HTTP/1.1 keep-alive,
+  `TCP_NODELAY`, and `accept4` on Linux
 - nginx: 1.31.8, one worker, `sendfile on`
 - Caddy: 2.11.7, `file-server`, defaults
 - clients: `wrk` 4.2.0 for the keep-alive pass, `ab` for the
@@ -35,9 +36,9 @@ Keep-alive pass (`wrk -t2 -c8 -d3s`), requests/second:
 
 | File | sysweb | nginx | Caddy |
 | ---: | ---: | ---: | ---: |
-| 1 KiB | 26,415 | 32,684 | 34,796 |
-| 64 KiB | 24,248 | 27,276 | 23,869 |
-| 1 MiB | 7,099 | 7,136 | 4,465 |
+| 1 KiB | 27,477 | 33,737 | 35,179 |
+| 64 KiB | 24,385 | 27,862 | 25,123 |
+| 1 MiB | 7,436 | 7,274 | 4,339 |
 
 All three servers can now reuse connections in this pass. sysweb is within
 about 20% of nginx on 1 KiB, effectively level on 64 KiB/1 MiB, and ahead of
@@ -47,9 +48,9 @@ No-keep-alive pass (`ab -n 2000/200 -c8`, no `-k`), requests/second:
 
 | File | sysweb | nginx | Caddy |
 | ---: | ---: | ---: | ---: |
-| 1 KiB | 20,008 | 22,950 | 17,990 |
-| 64 KiB | 18,246 | 16,323 | 12,936 |
-| 1 MiB | 4,105 | 4,077 | 3,381 |
+| 1 KiB | 19,235 | 26,825 | 19,407 |
+| 64 KiB | 18,272 | 19,941 | 14,155 |
+| 1 MiB | 4,151 | 4,147 | 3,442 |
 
 The 1 MiB numbers are noisy and should not be read as a sysweb win.
 Loopback, client CPU, page-cache state, and `ab`'s own per-request overhead

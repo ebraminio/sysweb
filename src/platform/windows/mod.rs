@@ -16,6 +16,7 @@ const SOCKET_ERROR: i32 = -1;
 const AF_INET: i32 = 2;
 const SOCK_STREAM: i32 = 1;
 const IPPROTO_TCP: i32 = 6;
+const TCP_NODELAY: i32 = 1;
 const SOL_SOCKET: i32 = 0xffff;
 const SO_EXCLUSIVEADDRUSE: i32 = -5;
 const GENERIC_READ: u32 = 0x8000_0000;
@@ -636,10 +637,31 @@ impl Platform for Sys {
         Ok(Listener(fd))
     }
 
+    fn set_nodelay(fd: usize) -> Result<()> {
+        let one: i32 = 1;
+        if unsafe {
+            setsockopt(
+                fd,
+                IPPROTO_TCP,
+                TCP_NODELAY,
+                &one as *const i32 as *const u8,
+                4,
+            )
+        } == SOCKET_ERROR
+        {
+            return Err(Self::last_wsa());
+        }
+        Ok(())
+    }
+
     fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream> {
         loop {
             let fd = unsafe { accept(listener.0, null_mut(), null_mut()) };
             if fd != INVALID_SOCKET {
+                if let Err(error) = Self::set_nodelay(fd) {
+                    unsafe { closesocket(fd) };
+                    return Err(error);
+                }
                 return Ok(Stream(fd));
             }
             match Self::last_wsa() {
@@ -1044,7 +1066,14 @@ impl AsyncPlatform for Sys {
         loop {
             let fd = unsafe { accept(listener.0, null_mut(), null_mut()) };
             if fd != INVALID_SOCKET {
-                set_nonblocking(fd)?;
+                if let Err(error) = Self::set_nodelay(fd) {
+                    unsafe { closesocket(fd) };
+                    return Err(error);
+                }
+                if let Err(error) = set_nonblocking(fd) {
+                    unsafe { closesocket(fd) };
+                    return Err(error);
+                }
                 return Ok(Stream(fd));
             }
             match Self::last_wsa() {
