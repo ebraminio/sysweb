@@ -116,7 +116,7 @@ Make the blocking server pleasant and safe enough to run on a LAN.
 - [ ] `strace`/`dtruss` audit: Linux makes only the expected syscalls and calls
       no libc symbol; macOS imports only the allowlisted libSystem functions.
 - [ ] Compare behavior against a reference server for the supported subset.
-- [ ] Add a benchmark script and record baseline throughput/latency.
+- [x] Add a benchmark script and record baseline throughput/latency (`bench/`).
 
 ---
 
@@ -155,10 +155,12 @@ replacement and Windows IOCP remain.
 - [ ] Per-slot deadlines for header read, idle keep-alive, and write progress.
 - [ ] Bounded accept loop per event to avoid starving existing connections.
 - [ ] Replace the blocking accept backoff with a reactor timer/deadline and
-      remove `Platform::sleep_ms` if no blocking backend remains.
+      remove `Platform::sleep_ms` if no blocking backend remains. This only
+      applies to the `--blocking` fallback; the async path never sleeps in the
+      accept loop.
 - [ ] Backpressure: stop reading when the response socket is not writable;
       apply the same discipline to upload bodies and disk writes.
-- [ ] Keep-alive integrated into the state machine.
+- [x] Keep-alive integrated into the async state machine (classic form also redirects back to the listing).
 - [ ] `Connection: close` remains the default on errors.
 
 ### Performance and validation
