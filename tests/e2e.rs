@@ -52,12 +52,20 @@ fn create_fixtures(root: &Path, outside: &Path) {
 
     write_file(root, "assets/hello world.txt", b"hello list");
     write_file(root, "assets/app.js", b"console.log(1)");
+    #[cfg(unix)]
     write_file(root, "assets/a&b<c>\".txt", b"escaped");
+    #[cfg(not(unix))]
+    write_file(root, "assets/a&b.txt", b"escaped");
     write_file(root, "assets/empty.txt", b"");
     write_file(root, "assets/replace.txt", b"old");
     fs::create_dir_all(root.join("assets/nested")).expect("nested dir");
-    std::os::unix::fs::symlink("/etc/passwd", root.join("assets/leak")).expect("symlink");
-    std::os::unix::fs::symlink(outside, root.join("assets/linkdir")).expect("dir symlink");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("/etc/passwd", root.join("assets/leak")).expect("symlink");
+        std::os::unix::fs::symlink(outside, root.join("assets/linkdir")).expect("dir symlink");
+    }
+    #[cfg(not(unix))]
+    let _ = outside;
 }
 
 fn start_server(extra: &[&str]) -> TestServer {
@@ -419,21 +427,33 @@ fn serves_static_files_and_directory_indexes() {
     assert!(page.contains("data-upload=\"0\""));
     assert!(page.contains("hello world.txt"));
     assert!(page.contains("text/javascript"));
-    assert!(page.contains("a&amp;b&lt;c&gt;&quot;.txt"));
-    assert!(!page.contains("a&b<c>\""));
-    assert!(page.contains("href=\"/assets/a%26b%3Cc%3E%22.txt\""));
+    #[cfg(unix)]
+    {
+        assert!(page.contains("a&amp;b&lt;c&gt;&quot;.txt"));
+        assert!(!page.contains("a&b<c>\""));
+        assert!(page.contains("href=\"/assets/a%26b%3Cc%3E%22.txt\""));
+    }
+    #[cfg(not(unix))]
+    {
+        assert!(page.contains("a&amp;b.txt"));
+        assert!(!page.contains("a&b.txt"));
+        assert!(page.contains("href=\"/assets/a%26b.txt\""));
+    }
 
-    // A symlink is listed but not followed.
-    let response = get(port, "/assets/leak");
-    let (head, _) = split(&response);
-    assert_status(&head, "HTTP/1.1 403 Forbidden");
-    assert!(text(&get(port, "/assets/")).contains("symlinks are not served"));
+    #[cfg(unix)]
+    {
+        // A symlink is listed but not followed.
+        let response = get(port, "/assets/leak");
+        let (head, _) = split(&response);
+        assert_status(&head, "HTTP/1.1 403 Forbidden");
+        assert!(text(&get(port, "/assets/")).contains("symlinks are not served"));
 
-    // A symlinked directory must not be traversed, even for a real file
-    // behind it.
-    let response = get(port, "/assets/linkdir/secret.txt");
-    let (head, _) = split(&response);
-    assert_status(&head, "HTTP/1.1 403 Forbidden");
+        // A symlinked directory must not be traversed, even for a real file
+        // behind it.
+        let response = get(port, "/assets/linkdir/secret.txt");
+        let (head, _) = split(&response);
+        assert_status(&head, "HTTP/1.1 403 Forbidden");
+    }
 
     let response = get(port, "/assets/nested/");
     let (head, body) = split(&response);
@@ -538,9 +558,12 @@ fn uploads_create_files_and_directories() {
     let response = put(port, "/assets/no-parent/file.txt", b"x");
     assert_status(&split(&response).0, "HTTP/1.1 404 Not Found");
 
-    // Writes through a symlinked directory are refused as well.
-    let response = put(port, "/assets/linkdir/upload.txt", b"x");
-    assert_status(&split(&response).0, "HTTP/1.1 403 Forbidden");
+    #[cfg(unix)]
+    {
+        // Writes through a symlinked directory are refused as well.
+        let response = put(port, "/assets/linkdir/upload.txt", b"x");
+        assert_status(&split(&response).0, "HTTP/1.1 403 Forbidden");
+    }
 
     let response = put(port, "/", b"x");
     assert_status(&split(&response).0, "HTTP/1.1 400 Bad Request");
@@ -880,7 +903,8 @@ fn async_idle_timeout_closes_stale_connection() {
 fn async_concurrent_gets_fill_all_slots() {
     let server = start_server(&["--async"]);
     let mut clients = Vec::new();
-    for _ in 0..7 {
+    let clients_count = if cfg!(windows) { 3 } else { 7 };
+    for _ in 0..clients_count {
         let port = server.port;
         clients.push(std::thread::spawn(move || {
             let response = get(port, "/large.bin");

@@ -533,6 +533,23 @@ fn interface_name(index: u32, out: &mut Interface) {
     out.name_len = pos;
 }
 
+fn set_nodelay(fd: usize) -> Result<()> {
+    let one: i32 = 1;
+    if unsafe {
+        setsockopt(
+            fd,
+            IPPROTO_TCP,
+            TCP_NODELAY,
+            &one as *const i32 as *const u8,
+            4,
+        )
+    } == SOCKET_ERROR
+    {
+        return Err(Sys::last_wsa());
+    }
+    Ok(())
+}
+
 impl Platform for Sys {
     type Listener = Listener;
     type Stream = Stream;
@@ -637,28 +654,11 @@ impl Platform for Sys {
         Ok(Listener(fd))
     }
 
-    fn set_nodelay(fd: usize) -> Result<()> {
-        let one: i32 = 1;
-        if unsafe {
-            setsockopt(
-                fd,
-                IPPROTO_TCP,
-                TCP_NODELAY,
-                &one as *const i32 as *const u8,
-                4,
-            )
-        } == SOCKET_ERROR
-        {
-            return Err(Self::last_wsa());
-        }
-        Ok(())
-    }
-
     fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream> {
         loop {
             let fd = unsafe { accept(listener.0, null_mut(), null_mut()) };
             if fd != INVALID_SOCKET {
-                if let Err(error) = Self::set_nodelay(fd) {
+                if let Err(error) = set_nodelay(fd) {
                     unsafe { closesocket(fd) };
                     return Err(error);
                 }
@@ -1066,7 +1066,7 @@ impl AsyncPlatform for Sys {
         loop {
             let fd = unsafe { accept(listener.0, null_mut(), null_mut()) };
             if fd != INVALID_SOCKET {
-                if let Err(error) = Self::set_nodelay(fd) {
+                if let Err(error) = set_nodelay(fd) {
                     unsafe { closesocket(fd) };
                     return Err(error);
                 }

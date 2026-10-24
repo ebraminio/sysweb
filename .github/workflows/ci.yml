@@ -77,6 +77,9 @@ jobs:
         shell: pwsh
         run: ./scripts/check-windows-imports.ps1 -Exe target/release/syswebd.exe
 
+      - name: Tests (release)
+        run: cargo test --release -- --test-threads=1
+
       - name: Smoke test
         shell: pwsh
         run: ./scripts/windows-smoke.ps1 -Exe target/release/syswebd.exe

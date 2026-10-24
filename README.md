@@ -62,7 +62,7 @@ feature map, and what is deliberately not carried forward (notably `--cmd`).
 | Linux x86_64 | ✅ cross-built locally; CI job | raw syscalls, static ELF | **none** |
 | Linux aarch64 | ✅ cross-built + checked locally; CI check | raw syscalls, static ELF | **none** |
 | macOS arm64 | ✅ tested locally; CI job | libSystem ABI | libSystem imports only; no CRT/std |
-| Windows x86_64 | ✅ CRT-free Win32 async (`WSAPoll`) tested; CI + release artifact | Win32 / shell32 / ws2_32 | **none** |
+| Windows x86_64 | ✅ CRT-free Win32 async (`WSAPoll`); CI e2e + smoke + release | Win32 / shell32 / ws2_32 / iphlpapi | **none** |
 
 Linux is the primary target for the libc-free goal. macOS uses the public
 libSystem ABI: Apple does not promise stability for raw syscall numbers or

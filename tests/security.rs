@@ -4,6 +4,8 @@
 //! exercises the real server process with traversal, symlink, malformed-path,
 //! and randomized requests, asserting a bounded status set and no secret bytes.
 
+#![cfg(unix)]
+
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};

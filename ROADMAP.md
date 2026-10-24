@@ -199,7 +199,7 @@ lands against the async `Reactor` trait.
 - [ ] File I/O with `CreateFile2`/`GetFileSizeEx`/`ReadFile`.
 - [x] CI job on `windows-latest`; `dumpbin /dependents` proves no CRT DLLs and
       `dumpbin /imports` lists only the intended Win32 DLLs.
-- [ ] E2E test on Windows.
+- [x] E2E test on Windows (Unix-symlink cases skipped; Windows junction smoke covers escape attempts).
 
 Acceptance: a `.exe` that serves the same test suite, imports no
 `vcruntime`/`msvcrt`/`ucrtbase`, and uses IOCP for socket readiness.
