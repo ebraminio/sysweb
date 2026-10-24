@@ -4,14 +4,14 @@
 //! can keep using raw `PUT`; this parser adds the classic HTML form path
 //! without allocating.
 //!
-//! The parser holds at most one 32 KiB buffer plus a boundary-sized tail. File
+//! The parser holds at most one 8 KiB buffer plus a boundary-sized tail. File
 //! bytes are handed to a [`Sink`] as they are confirmed, so a multi-gigabyte
 //! part never has to fit in memory.
 
 pub const MAX_BOUNDARY: usize = 70;
 pub const MAX_FILENAME: usize = 255;
 
-const BUFFER: usize = 32 * 1024;
+const BUFFER: usize = 8 * 1024;
 const MAX_HEADERS: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

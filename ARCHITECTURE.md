@@ -333,7 +333,7 @@ Raw `PUT` is the primary upload path, but old browsers and no-JavaScript forms
 need `multipart/form-data`. `src/multipart.rs` implements a bounded streaming
 parser:
 
-- one 32 KiB buffer plus a boundary-sized tail; the body is never buffered
+- one 8 KiB buffer plus a boundary-sized tail; the body is never buffered
   whole;
 - quote-aware parsing of `Content-Type: ...; boundary=...` and
   `Content-Disposition: ...; filename=...`;
@@ -417,7 +417,7 @@ multipart parser is only the compatibility path for classic form `POST`s.
 | redirect `Location` | ~3 KiB | one redirect |
 | directory entries | 4 KiB | one listing |
 | listing chunk | 8 KiB | one streamed fragment |
-| multipart parser | 32 KiB | one form upload |
+| multipart parser | 8 KiB | one form upload |
 | multipart headers | 4 KiB (inside parser buffer) | one part |
 | upload/file chunk | 8 KiB | one PUT/upload read |
 | log line | 1.2 KiB | one log event |
@@ -567,7 +567,7 @@ struct Connection {
 }
 ```
 
-A fixed array of `MAX_CONNECTIONS` slots (24 on all platforms; 32 overflows the debug-build stack) is allocated once
+A fixed array of `MAX_CONNECTIONS` slots (32 on all platforms; the 8 KiB parser keeps debug builds within the stack) is allocated once
 in the server's stack or a static. Each event carries a slot token. There is no
 per-connection heap allocation and no unbounded queue. Idle/read/write timeouts
 come from the reactor wait timeout plus a per-slot deadline.

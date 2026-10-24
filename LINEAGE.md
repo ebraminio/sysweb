@@ -91,7 +91,7 @@ page. There is no bundle, no build step, and no asset directory to lose.
 
 Raw `PUT` is still the primary path because it is simpler and supports
 progress cleanly. Classic `multipart/form-data` `POST` is now implemented as a
-bounded compatibility layer for old and no-JavaScript browsers, using a 32 KiB
+bounded compatibility layer for old and no-JavaScript browsers, using an 8 KiB
 streaming parser and one file part per request:
 
 ```sh

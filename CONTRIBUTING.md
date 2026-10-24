@@ -87,7 +87,7 @@ chunked for HTTP/1.1, close-delimited for HTTP/1.0. Keep both paths tested.
 
 Uploads deserve extra care: require `Content-Length`, stream in fixed chunks, unlink partial files, and keep the feature behind `--upload`.
 The multipart parser must stay incremental: never buffer a whole body, add
-chunk-split tests for every state transition, keep the 32 KiB buffer bound, and
+chunk-split tests for every state transition, keep the 8 KiB buffer bound, and
 sanitize filenames before touching the filesystem.
 
 For fuzz changes:
