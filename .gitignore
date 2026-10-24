@@ -11,3 +11,4 @@
 /spikes/async-no-alloc/target
 /spikes/coroutine/target
 /bench/.work
+/spikes/download-c10k/target

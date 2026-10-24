@@ -29,4 +29,10 @@ A nightly coroutine-per-connection prototype. It compares a linear
 records the pin/type/borrow problems that appear before it can live in a fixed
 slot.
 
+## `download-c10k`
+
+A macOS-only download server with compact state (~2.3 KiB/connection),
+`sendfile`, optional keep-alive, and a 12,000-record table. It benchmarks the
+cost of separating download state from upload/listing buffers.
+
 Each directory has its own build/run notes.

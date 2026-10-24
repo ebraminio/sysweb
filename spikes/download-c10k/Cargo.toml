@@ -1,0 +1,23 @@
+[package]
+name = "download-c10k-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "download-c10k"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+sysweb = { path = "../.." }
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[workspace]
