@@ -1,0 +1,13 @@
+[package]
+name = "coroutine-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "coroutine-spike"
+path = "src/main.rs"
+test = false
+bench = false
+
+[workspace]

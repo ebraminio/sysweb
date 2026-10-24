@@ -22,4 +22,11 @@ A small future-size experiment showing that `core::future` is technically
 available without allocation. It is not used by the server; the explicit
 state machine is kept for readability and syscall visibility.
 
+## `coroutine`
+
+A nightly coroutine-per-connection prototype. It compares a linear
+`yield Need::Read/Write` handler with an explicit `Step` state machine, and
+records the pin/type/borrow problems that appear before it can live in a fixed
+slot.
+
 Each directory has its own build/run notes.

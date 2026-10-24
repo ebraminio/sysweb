@@ -9,4 +9,5 @@
 /spikes/windows-no-crt/target
 /spikes/windows-iocp/target
 /spikes/async-no-alloc/target
+/spikes/coroutine/target
 /bench/.work
