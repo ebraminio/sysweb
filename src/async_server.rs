@@ -1,8 +1,7 @@
 //! Experimental non-blocking GET/HEAD server.
 //!
 //! This is intentionally a separate path from the blocking `Server`: the
-//! `--async` flag exercises the readiness reactor while the upload state
-//! machine is still being built. Metadata and listings remain synchronous;
+//! The readiness reactor drives the upload/response state machine. Metadata and listings remain synchronous;
 //! socket progress, header writes, and file transfer are non-blocking.
 
 use crate::config::Config;
@@ -556,6 +555,12 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
         }
     };
 
+    if let Some((user, pass)) = config.userpass() {
+        if !crate::auth::authorized(request.authorization, user, pass) {
+            slot.prepare_error(Status::Unauthorized, request.method == Method::Head);
+            return;
+        }
+    }
     let method = request.method;
     slot.log_method = method;
     let range = request.range;

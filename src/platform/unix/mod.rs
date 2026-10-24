@@ -194,45 +194,6 @@ impl Platform for Sys {
         Ok(listener)
     }
 
-    fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream> {
-        loop {
-            match abi::accept(listener.fd) {
-                Err(Error::Interrupted) => continue,
-                Ok(fd) => {
-                    abi::configure_stream(fd)?;
-                    return Ok(Stream { fd });
-                }
-                Err(error) => return Err(error),
-            }
-        }
-    }
-
-    fn read(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize> {
-        loop {
-            match abi::read(stream.fd, buf) {
-                Err(Error::Interrupted) => continue,
-                other => return other,
-            }
-        }
-    }
-
-    fn sleep_ms(&mut self, ms: u64) {
-        let _ = abi::sleep_ms(ms);
-    }
-
-    fn write_all(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<()> {
-        let mut written = 0usize;
-        while written < buf.len() {
-            match abi::send(stream.fd, &buf[written..]) {
-                Ok(0) => return Err(Error::BrokenPipe),
-                Ok(count) => written += count,
-                Err(Error::Interrupted) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(())
-    }
-
     fn open(&mut self, path: &[u8]) -> Result<Self::File> {
         loop {
             match abi::open(self.root()?, path) {
@@ -250,35 +211,6 @@ impl Platform for Sys {
                 other => return other,
             }
         }
-    }
-
-    fn read_file(&mut self, file: &mut Self::File, buf: &mut [u8]) -> Result<usize> {
-        loop {
-            match abi::read(file.fd, buf) {
-                Err(Error::Interrupted) => continue,
-                other => return other,
-            }
-        }
-    }
-
-    fn send_file(
-        &mut self,
-        stream: &mut Self::Stream,
-        file: &mut Self::File,
-        offset: u64,
-        len: u64,
-    ) -> Result<u64> {
-        let mut sent = 0u64;
-        while sent < len {
-            let want = core::cmp::min(len - sent, 1 << 30) as usize;
-            match abi::sendfile(stream.fd, file.fd, offset + sent, want) {
-                Ok(0) => break,
-                Ok(count) => sent += count as u64,
-                Err(Error::Interrupted) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(sent)
     }
 
     fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir> {
@@ -606,15 +538,5 @@ mod tests {
         let mut interfaces = [Interface::default(); 16];
         let count = sys.interfaces(&mut interfaces);
         assert!(count > 0, "no IPv4 interfaces found");
-    }
-
-    #[test]
-    fn sleep_returns() {
-        let start = std::time::Instant::now();
-        super::abi::sleep_ms(20).expect("sleep");
-        assert!(
-            start.elapsed() >= std::time::Duration::from_millis(10),
-            "sleep_ms returned too early"
-        );
     }
 }

@@ -69,9 +69,9 @@ fallbacks.
 
 ---
 
-## M1 — Hardening, still blocking 🚧
+## M1 — Hardening, async 🚧
 
-Make the blocking server pleasant and safe enough to run on a LAN.
+Make the async server pleasant and safe enough to run on a LAN.
 
 ### HTTP correctness
 
@@ -154,10 +154,6 @@ replacement and Windows IOCP remain.
       `ReadingBody → WritingFile`, listing, and closing.
 - [ ] Per-slot deadlines for header read, idle keep-alive, and write progress.
 - [ ] Bounded accept loop per event to avoid starving existing connections.
-- [ ] Replace the blocking accept backoff with a reactor timer/deadline and
-      remove `Platform::sleep_ms` if no blocking backend remains. This only
-      applies to the `--blocking` fallback; the async path never sleeps in the
-      accept loop.
 - [ ] Backpressure: stop reading when the response socket is not writable;
       apply the same discipline to upload bodies and disk writes.
 - [x] Keep-alive integrated into the async state machine (classic form also redirects back to the listing).

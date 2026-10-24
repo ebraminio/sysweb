@@ -71,6 +71,7 @@ pub struct Request<'a> {
     pub content_type: Option<&'a [u8]>,
     pub range: Option<RangeSpec>,
     pub expect_continue: bool,
+    pub authorization: Option<&'a [u8]>,
     /// Index just past `\r\n\r\n`; body bytes may already follow in the buffer.
     pub body_offset: usize,
 }
@@ -133,6 +134,7 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
     let mut content_type = None;
     let mut range = None;
     let mut expect_continue = false;
+    let mut authorization = None;
     let mut connection = Connection::Default;
     if line_end + 2 <= head.len() {
         for header_line in head[line_end + 2..].split(|&b| b == b'\n') {
@@ -163,6 +165,8 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
                 range = parse_range(value);
             } else if name.eq_ignore_ascii_case(b"expect") {
                 expect_continue = value.eq_ignore_ascii_case(b"100-continue");
+            } else if name.eq_ignore_ascii_case(b"authorization") {
+                authorization = Some(value);
             } else if name.eq_ignore_ascii_case(b"connection") {
                 for token in value.split(|&byte| byte == b',') {
                     let token = trim(token);
@@ -187,6 +191,7 @@ pub fn parse(buf: &[u8]) -> Result<Request<'_>, ParseError> {
         content_type,
         range,
         expect_continue,
+        authorization,
         body_offset: end,
     })
 }
@@ -328,6 +333,7 @@ pub enum Status {
     Forbidden,
     NotFound,
     MethodNotAllowed,
+    Unauthorized,
     PartialContent,
     UnsupportedMediaType,
     RangeNotSatisfiable,
@@ -350,6 +356,7 @@ impl Status {
             Status::Forbidden => 403,
             Status::NotFound => 404,
             Status::MethodNotAllowed => 405,
+            Status::Unauthorized => 401,
             Status::PartialContent => 206,
             Status::UnsupportedMediaType => 415,
             Status::RangeNotSatisfiable => 416,
@@ -372,6 +379,7 @@ impl Status {
             Status::Forbidden => b"Forbidden",
             Status::NotFound => b"Not Found",
             Status::MethodNotAllowed => b"Method Not Allowed",
+            Status::Unauthorized => b"Unauthorized",
             Status::PartialContent => b"Partial Content",
             Status::UnsupportedMediaType => b"Unsupported Media Type",
             Status::RangeNotSatisfiable => b"Range Not Satisfiable",
@@ -392,6 +400,7 @@ impl Status {
             Status::Forbidden => b"403 Forbidden\n",
             Status::NotFound => b"404 Not Found\n",
             Status::MethodNotAllowed => b"405 Method Not Allowed\n",
+            Status::Unauthorized => b"401 Unauthorized\n",
             Status::PartialContent => b"",
             Status::UnsupportedMediaType => b"415 Unsupported Media Type\n",
             Status::RangeNotSatisfiable => b"416 Range Not Satisfiable\n",
@@ -479,6 +488,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_authorization_header() {
+        let r = parse(b"GET / HTTP/1.1\r\nAuthorization: Basic dXNlcjpwYXNz\r\n\r\n").unwrap();
+        assert_eq!(r.authorization, Some(&b"Basic dXNlcjpwYXNz"[..]));
+        assert_eq!(
+            parse(b"GET / HTTP/1.1\r\n\r\n").unwrap().authorization,
+            None
+        );
+    }
+
+    #[test]
     fn parses_put_headers_and_body_offset() {
         let raw = b"PUT /file.txt HTTP/1.1\r\nContent-Length: 5\r\nContent-Type: text/plain\r\nExpect: 100-continue\r\n\r\nhello";
         let r = parse(raw).unwrap();
@@ -556,6 +575,7 @@ mod tests {
         assert_eq!(Status::Ok.error_body(), b"");
         assert_eq!(Status::Created.code(), 201);
         assert_eq!(Status::MovedPermanently.code(), 301);
+        assert_eq!(Status::Unauthorized.code(), 401);
         assert_eq!(Status::SeeOther.code(), 303);
         assert_eq!(Status::NotFound.code(), 404);
         assert_eq!(Status::NotFound.reason(), b"Not Found");

@@ -40,7 +40,7 @@ In scope:
 Out of scope for 0.1:
 
 - TLS termination (there is none);
-- authentication or authorization;
+- authorization beyond optional HTTP Basic authentication;
 - multi-tenant isolation;
 - protecting files whose permissions already allow the server user to read
   them;
@@ -101,7 +101,8 @@ are unsupported, not emulated.
 
 ### No TLS
 
-Traffic is plaintext. Do not send credentials or sensitive data. Put a TLS
+Traffic is plaintext. Basic auth credentials are only base64-encoded, not
+encrypted. Do not send credentials or sensitive data. Put a TLS
 terminator in front if you need HTTPS.
 
 ### Single-threaded blocking I/O
@@ -123,7 +124,8 @@ you control.
 ### Uploads are unauthenticated
 
 With `--upload`, anyone who can reach the port can write files, create
-directories, and (with `--replace`) overwrite them. There is no authentication,
+directories, and (with `--replace`) overwrite them. Optional `--userpass`
+protects every route, including uploads; without it there is no authentication,
 quota, or per-client limit. Prefer `--host 127.0.0.1`, or put an authenticated
 reverse proxy in front.
 
@@ -213,7 +215,7 @@ minimal document root.
 ## Security-relevant roadmap
 
 - read/write/idle timeouts;
-- connection limits and accept backoff;
+- connection limits;
 - authentication and opt-in delete/rename;
 - CSRF/Origin/Host validation;
 - atomic temp+rename uploads and disk quotas;

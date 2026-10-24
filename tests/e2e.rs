@@ -773,7 +773,7 @@ fn replace_mode_overwrites() {
 
 #[test]
 fn async_get_and_liveness() {
-    let server = start_server(&["--async", "--upload"]);
+    let server = start_server(&["--upload"]);
 
     let response = get(server.port, "/");
     let (head, body) = split(&response);
@@ -872,15 +872,6 @@ fn async_get_and_liveness() {
 }
 
 #[test]
-fn blocking_fallback_still_works() {
-    let server = start_server(&["--blocking"]);
-    let response = get(server.port, "/hello%20world.txt");
-    let (head, body) = split(&response);
-    assert_status(&head, "HTTP/1.1 200 OK");
-    assert_eq!(body, b"hello, space");
-}
-
-#[test]
 fn async_idle_timeout_closes_stale_connection() {
     let server = start_server(&["--idle-timeout", "1"]);
     let mut stale = TcpStream::connect(("127.0.0.1", server.port)).expect("connect");
@@ -901,7 +892,7 @@ fn async_idle_timeout_closes_stale_connection() {
 
 #[test]
 fn async_concurrent_gets_fill_all_slots() {
-    let server = start_server(&["--async"]);
+    let server = start_server(&[]);
     let mut clients = Vec::new();
     let clients_count = if cfg!(windows) { 3 } else { 7 };
     for _ in 0..clients_count {
@@ -1060,32 +1051,9 @@ fn classic_form_post_redirects_back_to_the_listing() {
 }
 
 #[test]
-fn classic_form_redirect_also_works_in_blocking_mode() {
-    let server = start_server(&["--upload", "--blocking"]);
-    let body = multipart_body("----redirectb", "redirected-blocking.txt", b"blocking");
-    let raw = format!(
-        "POST /?sysweb-form=1 HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=----redirectb\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    )
-    .into_bytes();
-    let mut request_bytes = raw;
-    request_bytes.extend_from_slice(&body);
-    let response = request(server.port, &request_bytes);
-    let (head, body) = split(&response);
-    assert_status(&head, "HTTP/1.1 303 See Other");
-    assert_eq!(header(&head, "Location"), Some("/"));
-    assert!(body.is_empty());
-
-    let response = get(server.port, "/redirected-blocking.txt");
-    let (head, body) = split(&response);
-    assert_status(&head, "HTTP/1.1 200 OK");
-    assert_eq!(body, b"blocking");
-}
-
-#[test]
 fn classic_text_form_uploads_via_get() {
-    for extra in [&["--upload"][..], &["--upload", "--blocking"][..]] {
-        let server = start_server(extra);
+    {
+        let server = start_server(&["--upload"]);
         let response = request(
             server.port,
             b"GET /?sysweb-text=1&name=note%20one.txt&text=hello+world HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
@@ -1100,4 +1068,32 @@ fn classic_text_form_uploads_via_get() {
         assert_status(&head, "HTTP/1.1 200 OK");
         assert_eq!(body, b"hello world");
     }
+}
+
+#[test]
+fn basic_auth_challenges_and_accepts_credentials() {
+    let server = start_server(&["--userpass", "user:pass"]);
+    let response = request(
+        server.port,
+        b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    );
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 401 Unauthorized");
+    assert_eq!(
+        header(&head, "WWW-Authenticate"),
+        Some("Basic realm=\"sysweb\"")
+    );
+    assert_eq!(body, b"401 Unauthorized\n");
+
+    let response = request(
+        server.port,
+        b"GET / HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic dXNlcjpwYXNz\r\nConnection: close\r\n\r\n",
+    );
+    assert_status(&split(&response).0, "HTTP/1.1 200 OK");
+
+    let response = request(
+        server.port,
+        b"GET / HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic d3Jvbmc6bm9wZQ==\r\nConnection: close\r\n\r\n",
+    );
+    assert_status(&split(&response).0, "HTTP/1.1 401 Unauthorized");
 }

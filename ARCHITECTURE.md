@@ -14,7 +14,7 @@ Goals:
 4. Linux: no libc, static ELF, custom `_start`.
 5. Windows: no-CRT spike validated; IOCP backend on the roadmap.
 6. `unsafe` concentrated in small, reviewable ABI modules.
-7. A blocking implementation that already has the shape of the async one.
+7. An async implementation with an explicit, fixed-buffer state machine.
 8. Latest OS APIs only. No legacy fallbacks.
 
 Non-goals for now: TLS, dynamic content, CGI, compression, virtual hosts,
@@ -85,15 +85,9 @@ pub trait Platform {
 
     fn set_root(&mut self, root: &[u8]) -> Result<()>;
     fn bind(&mut self, addr: SocketAddr, backlog: u16) -> Result<Self::Listener>;
-    fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
-    fn read(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
-    fn write_all(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<()>;
-    fn sleep_ms(&mut self, ms: u64);
 
     fn open(&mut self, path: &[u8]) -> Result<Self::File>;
     fn file_info(&mut self, file: &Self::File) -> Result<FileInfo>;
-    fn read_file(&mut self, file: &mut Self::File, buf: &mut [u8]) -> Result<usize>;
-    fn send_file(
         &mut self,
         stream: &mut Self::Stream,
         file: &mut Self::File,
@@ -131,13 +125,10 @@ Design notes:
   without rejecting a symlinked system prefix such as macOS `/var`.
 - **Normalized errors.** `Error` hides errno differences (`EAGAIN` is 11 on
   Linux and 35 on macOS, `ECONNRESET` is 104 vs 54, etc.).
-- **Liveness over throughput.** A stalled blocking server is acceptable; a
-  permanent exit on transient pressure is not. `accept` retries
-  `EMFILE`/`ENFILE`, `ECONNABORTED`, `ECONNRESET`, and `EAGAIN` after a 100 ms
-  `sleep_ms` (libSystem `nanosleep` on macOS) instead of exiting.
-  `sleep_ms` is explicitly blocking-only: the async reactor must replace this
-  with a timer/deadline and remove it if no blocking backend remains.
-  Fatal listener errors still terminate; there is no supervisor yet.
+- **Liveness over throughput.** A permanent exit on transient pressure is not
+  acceptable. The async loop retries transient accept failures on the next
+  reactor wakeup. Fatal listener errors still terminate; there is no
+  supervisor yet.
 - **Size budget.** Binary size is a design constraint, not an afterthought.
   CI and the release workflow enforce 140 KiB on macOS arm64, 108 KiB on Linux
   x86_64, and 104 KiB on Linux aarch64 via `scripts/check-size.sh`; changing a
@@ -327,7 +318,7 @@ allocator.
 10. With keep-alive, per-request fields are reset, bytes after the consumed
     body are preserved for a pipelined request, and read interest is restored;
     after a cap of 1000 requests, or on `Connection: close`/error, the stream is
-    dropped. The `--blocking` path still closes after one request. If a
+    dropped. If a
     rejected request announced a small body, it is drained (up to 64 KiB)
     first: closing with unread input can turn the final FIN into an RST on
     macOS and discard the response the client is reading.
@@ -487,14 +478,12 @@ not enabled; the
 Windows IOCP spike proves `AcceptEx`/`WSARecv`/`WSASend`, but the full Win32
 backend is not implemented.
 
-The async path is now the default on Unix: epoll (Linux) or kqueue (macOS)
+The async path is the only server path: epoll (Linux) or kqueue (macOS)
 readiness, non-blocking accept/read/write/sendfile, and a fixed-slot
 GET/HEAD/PUT/POST state machine. Metadata and listings remain synchronous.
 A 1-second poll tick drives the per-slot idle deadline (about 30 seconds).
-`--blocking` keeps the old path for comparison. This is not the final io_uring
-backend, but it establishes the state-machine and liveness properties.
 
-The blocking `Platform` trait is deliberately shaped so the async version is an
+The `Platform` trait is deliberately shaped so the async version is an
 extension, not a rewrite. The async backend will not use Rust `async`/`await`:
 a futures executor and its state machines tend to want allocation and add a lot
 of machinery for a static file server. A hand-written state machine over
@@ -589,10 +578,8 @@ need incremental state.
 
 ## Windows plan (milestone 2)
 
-A CRT-free Win32 **blocking** backend now exists for bring-up. It covers paths,
-files, directories, uploads, and sockets and runs on Windows 11. The final
-Windows backend is still IOCP; the blocking path is a validation step, not the
-async endpoint.
+A CRT-free Win32 async backend runs on Windows 11 and covers paths, files,
+directories, uploads, and sockets over `WSAPoll`. IOCP remains future work.
 
 A no-CRT entry/link spike lives in `spikes/windows-no-crt`: a 3,584-byte x86_64
 PE with a custom `mainCRTStartup`, no CRT, and only `KERNEL32.dll` imports
@@ -663,16 +650,16 @@ several.
   libSystem even though the binary has no allocator. Moving to
   `getattrlistbulk` would remove that allocation without returning to private
   syscall numbers.
-- **Single-threaded blocking**: no timeouts yet; a slow client can pin the
-  server. This is the main reason async is milestone 1.
+- **Single-threaded async**: a slow client occupies one fixed slot; there is no
+  per-request write deadline yet.
 - **Symlinks**: all links beneath the root are refused. The root's own path
   may contain symlinks because it is opened once at startup; hard links and
   bind mounts are outside the threat model.
 - **Latest-API floor**: Linux 5.6+, macOS 11+, Windows 10 1809+. There are no
   fallbacks for older kernels/OS releases; this is deliberate.
 - **Uploads are powerful**: `--upload` lets any client that can reach the port
-  write files; `--replace` can overwrite them. There is no authentication,
-  quota, or CSRF/Host validation yet. Prefer `--host 127.0.0.1` for local-only use.
+  write files; `--replace` can overwrite them. Optional `--userpass` provides
+  Basic auth; there is still no quota or CSRF/Host validation. Prefer `--host 127.0.0.1` for local-only use.
 - **Partial files**: a failed upload is unlinked, but a successful upload is
   written in place, not via temp+rename. `--replace` can therefore truncate an
   existing file before a failure. Atomic uploads are roadmap.
@@ -681,4 +668,4 @@ several.
 - **No `Date` header**: HTTP/1.1 says servers SHOULD send one. It is a roadmap
   item because it needs a clock syscall and civil-date conversion.
 - **Keep-alive is capped**: the async path closes after 1000 requests on one
-  connection; the blocking fallback does not reuse connections.
+  connection.

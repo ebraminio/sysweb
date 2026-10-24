@@ -5,6 +5,7 @@ use crate::platform::SocketAddr;
 pub const DEFAULT_PORT: u16 = 8080;
 pub const DEFAULT_BACKLOG: u16 = 128;
 pub const MAX_ROOT: usize = 256;
+pub const MAX_USERPASS: usize = 256;
 
 pub const USAGE: &str = concat!(
     "syswebd ",
@@ -20,10 +21,9 @@ pub const USAGE: &str = concat!(
      \x20   -H, --host <ADDR>      IPv4 address to bind (default: 0.0.0.0)\n\
      \x20       --backlog <N>      Listen backlog (default: 128)\n\
      \x20       --idle-timeout <S> Async idle timeout in seconds (default: 30)\n\
+     \x20       --userpass <U:P>   Require HTTP Basic auth (plaintext over HTTP)\n\
      \x20       --upload           Enable PUT uploads and folder creation\n\
      \x20       --replace          Allow uploads to replace existing files\n\
-     \x20       --async            Use the async reactor path (default)\n\
-     \x20       --blocking         Use the old blocking server path\n\
      \x20       --no-index         Disable generated directory indexes\n\
      \x20   -q, --quiet            Suppress startup and request logs\n\
      \x20   -h, --help             Print this help\n\
@@ -37,6 +37,7 @@ pub enum ConfigError {
     InvalidHost,
     InvalidBacklog,
     InvalidIdle,
+    InvalidUserpass,
     RootEmpty,
     RootTooLong,
     EmbeddedNul,
@@ -51,6 +52,9 @@ impl ConfigError {
             ConfigError::InvalidHost => b"host must be a dotted-quad IPv4 address",
             ConfigError::InvalidBacklog => b"backlog must be an integer in 1..=65535",
             ConfigError::InvalidIdle => b"idle timeout must be an integer in 1..=3600",
+            ConfigError::InvalidUserpass => {
+                b"userpass must be non-empty user:password (maximum 255 bytes)"
+            }
             ConfigError::RootEmpty => b"root directory must not be empty",
             ConfigError::RootTooLong => b"root directory is too long",
             ConfigError::EmbeddedNul => b"root directory contains a NUL byte",
@@ -70,8 +74,10 @@ pub struct Config {
     replace: bool,
     index: bool,
     port_explicit: bool,
-    async_mode: bool,
     idle_seconds: u16,
+    userpass: [u8; MAX_USERPASS],
+    userpass_len: usize,
+    userpass_colon: usize,
 }
 
 #[derive(Debug)]
@@ -95,8 +101,10 @@ impl Config {
         let mut replace = false;
         let mut index = true;
         let mut port_explicit = false;
-        let mut async_mode = true;
         let mut idle_seconds = 30u16;
+        let mut userpass = [0u8; MAX_USERPASS];
+        let mut userpass_len = 0usize;
+        let mut userpass_colon = 0usize;
 
         let mut i = 1usize; // skip argv[0]
         while i < args.len() {
@@ -123,6 +131,19 @@ impl Config {
                 i += 1;
                 continue;
             }
+            if arg == b"--userpass" {
+                let value = take(args, &mut i)?;
+                userpass_colon = parse_userpass(value, &mut userpass)?;
+                userpass_len = value.len();
+                i += 1;
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix(b"--userpass=") {
+                userpass_colon = parse_userpass(value, &mut userpass)?;
+                userpass_len = value.len();
+                i += 1;
+                continue;
+            }
             if arg == b"--upload" {
                 upload = true;
                 i += 1;
@@ -130,16 +151,6 @@ impl Config {
             }
             if arg == b"--replace" {
                 replace = true;
-                i += 1;
-                continue;
-            }
-            if arg == b"--async" {
-                async_mode = true;
-                i += 1;
-                continue;
-            }
-            if arg == b"--blocking" {
-                async_mode = false;
                 i += 1;
                 continue;
             }
@@ -218,8 +229,10 @@ impl Config {
             replace,
             index,
             port_explicit,
-            async_mode,
             idle_seconds,
+            userpass,
+            userpass_len,
+            userpass_colon,
         }))
     }
 
@@ -257,8 +270,15 @@ impl Config {
         self.port_explicit
     }
 
-    pub const fn async_mode(&self) -> bool {
-        self.async_mode
+    pub fn userpass(&self) -> Option<(&[u8], &[u8])> {
+        if self.userpass_len == 0 {
+            None
+        } else {
+            Some((
+                &self.userpass[..self.userpass_colon],
+                &self.userpass[self.userpass_colon + 1..self.userpass_len],
+            ))
+        }
     }
 
     pub const fn idle_seconds(&self) -> u16 {
@@ -277,6 +297,20 @@ fn parse_port(value: &[u8]) -> Result<u16, ConfigError> {
         return Err(ConfigError::InvalidPort);
     }
     Ok(parsed)
+}
+
+fn parse_userpass(value: &[u8], out: &mut [u8; MAX_USERPASS]) -> Result<usize, ConfigError> {
+    if value.is_empty() || value.len() > out.len() || value.contains(&0) {
+        return Err(ConfigError::InvalidUserpass);
+    }
+    let Some(colon) = value.iter().position(|&byte| byte == b':') else {
+        return Err(ConfigError::InvalidUserpass);
+    };
+    if colon == 0 || colon + 1 == value.len() {
+        return Err(ConfigError::InvalidUserpass);
+    }
+    out[..value.len()].copy_from_slice(value);
+    Ok(colon)
 }
 
 fn parse_idle(value: &[u8]) -> Result<u16, ConfigError> {
@@ -387,8 +421,21 @@ mod tests {
         assert!(!config.replace());
         assert!(config.index());
         assert!(!config.port_explicit());
-        assert!(config.async_mode());
         assert_eq!(config.idle_seconds(), 30);
+    }
+
+    #[test]
+    fn parses_userpass() {
+        let config = run(&[b"syswebd", b"--userpass", b"user:pass"]);
+        assert_eq!(config.userpass(), Some((&b"user"[..], &b"pass"[..])));
+        assert!(matches!(
+            Config::parse(&[b"syswebd", b"--userpass", b"user"]),
+            Err(ConfigError::InvalidUserpass)
+        ));
+        assert!(matches!(
+            Config::parse(&[b"syswebd", b"--userpass", b":pass"]),
+            Err(ConfigError::InvalidUserpass)
+        ));
     }
 
     #[test]
@@ -406,7 +453,6 @@ mod tests {
             b"--upload",
             b"--replace",
             b"--no-index",
-            b"--async",
             b"--idle-timeout",
             b"5",
         ]);
@@ -419,7 +465,6 @@ mod tests {
         assert!(config.replace());
         assert!(!config.index());
         assert!(config.port_explicit());
-        assert!(config.async_mode());
         assert_eq!(config.idle_seconds(), 5);
     }
 

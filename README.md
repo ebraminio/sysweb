@@ -243,11 +243,10 @@ OPTIONS:
                            a busy default falls back to the next free port)
     -H, --host <ADDR>      IPv4 address to bind (default: 0.0.0.0)
         --backlog <N>      Listen backlog (default: 128)
+        --userpass <U:P>   Require HTTP Basic auth (plaintext over HTTP)
         --upload           Enable PUT uploads and folder creation
         --replace          Allow uploads to replace existing files
         --no-index         Disable generated directory indexes
-        --async            Use the async reactor path (default)
-        --blocking         Use the old blocking server path
         --idle-timeout <S> Async idle timeout in seconds (default: 30)
     -q, --quiet            Suppress startup and request logs
     -h, --help             Print help
@@ -257,6 +256,15 @@ OPTIONS:
 The default bind is all IPv4 interfaces (`0.0.0.0`). Pass `--host 127.0.0.1`
 for a localhost-only server. At startup the server lists each interface URL,
 e.g. `lo0: http://127.0.0.1:8080` and `en0: http://192.168.1.130:8080`.
+HTTP Basic auth can protect every route:
+
+```sh
+./target/release/syswebd --root public --userpass 'user:pass'
+```
+
+Basic auth is encoded, not encrypted; without TLS it is only a casual access
+barrier.
+
 If the default port 8080 is occupied and
 no `--port` was given, the server tries the next ports. Use `--host 0.0.0.0`
 only when you mean it; this server has no TLS, authentication, or rate limiting.
@@ -342,10 +350,10 @@ Current stripped sizes from this workspace:
 
 | Target | Size | Budget |
 | --- | ---: | ---: |
-| macOS arm64 | 117,680 B | 140 KiB |
-| Linux x86_64 | 96,080 B | 108 KiB |
-| Linux aarch64 | 93,288 B | 104 KiB |
-| Windows x86_64 | 91,136 B | 116 KiB |
+| macOS arm64 | 117,504 B | 140 KiB |
+| Linux x86_64 | 84,616 B | 108 KiB |
+| Linux aarch64 | 80,976 B | 104 KiB |
+| Windows x86_64 | 81,920 B | 116 KiB |
 
 CI runs on `ubuntu-latest` and `macos-latest` (Apple Silicon). The release
 workflow builds and tests natively on `ubuntu-latest`, `ubuntu-24.04-arm`, and
@@ -446,19 +454,17 @@ and the async design.
 
 This is a milestone, not a hardened internet-facing server:
 
-- single-threaded and blocking; one slow client stalls everyone. That is
-  acceptable for this milestone: a stalled service is preferable to exiting.
-  Transient `accept` failures (for example `EMFILE` or `ECONNABORTED`) retry
-  after a 100 ms backoff; fatal listener errors still terminate the process;
+- single-threaded async; one slow client occupies one slot, not the server.
+  Transient `accept` failures are retried on the next reactor wakeup; fatal
+  listener errors still terminate the process;
 - no read/write timeouts yet (slowloris is possible, including slow uploads);
 - stress/load testing is deliberately scheduled after the async reactor. The
   current suites target crashes, resets, containment, and liveness, not
   throughput or latency under concurrency;
-- async keep-alive handles sequential requests and pipelined bytes; the
-  `--blocking` fallback still serves one request per connection;
-- the async reactor is the default on Unix; `--blocking` keeps the old path.
-  GET/HEAD/PUT/POST use non-blocking sockets, while metadata and listing work
-  remain synchronous. Idle connections are closed after roughly 30 seconds;
+- async keep-alive handles sequential requests and pipelined bytes;
+- the async reactor is the only server path. GET/HEAD/PUT/POST use
+  non-blocking sockets, while metadata and listing work remain synchronous.
+  Idle connections are closed after roughly 30 seconds;
 - uploads are off by default and have no auth, quota, or per-request size cap;
   disk exhaustion is the operator's responsibility;
 - classic form posts upload one file per request; `filename*` (RFC 5987) and

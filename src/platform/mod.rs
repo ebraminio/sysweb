@@ -5,9 +5,8 @@
 //! zero-sized type implementing the trait, and all buffers are supplied by
 //! the caller.
 //!
-//! The current implementation is blocking. The same trait shape is intended
-//! to grow a reactor (`io_uring`/`kqueue`/IOCP) for the async milestone; see
-//! `ARCHITECTURE.md`.
+//! File and metadata operations stay synchronous; socket progress goes through
+//! the readiness reactor described in `ARCHITECTURE.md`.
 
 #[cfg(unix)]
 pub mod unix;
@@ -24,7 +23,7 @@ pub use windows::{exit, write_stderr, write_stdout, Sys};
 pub enum Error {
     /// The call was interrupted by a signal; safe to retry.
     Interrupted,
-    /// The operation would block (used by the future non-blocking backend).
+    /// The operation would block (used by the non-blocking backend).
     WouldBlock,
     NotFound,
     PermissionDenied,
@@ -109,9 +108,8 @@ pub struct Event {
 
 /// Non-blocking OS services used by the async server.
 ///
-/// The blocking `Platform` trait remains for file/metadata operations and for
-/// the existing server path. Only socket progress is required to be async in
-/// the first milestone.
+/// The base `Platform` trait remains responsible for file/metadata operations.
+/// Socket progress is supplied here by epoll, kqueue, or WSAPoll.
 pub trait AsyncPlatform: Platform {
     type Poller;
 
@@ -202,30 +200,9 @@ pub trait Platform {
     fn bind(&mut self, addr: SocketAddr, backlog: u16) -> Result<Self::Listener>;
     /// Fill `out` with up-facing IPv4 interface addresses. Returns the count.
     fn interfaces(&mut self, out: &mut [Interface]) -> usize;
-    fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
-    fn read(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
-    fn write_all(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<()>;
-    /// Blocking-only backoff for transient accept failures.
-    ///
-    /// TODO(async): the reactor should schedule the retry through its timer or
-    /// deadline instead. Remove this method once the accept loop no longer
-    /// calls it and no blocking backend needs it.
-    fn sleep_ms(&mut self, ms: u64);
-
     /// Open `path` (relative to the document root) read-only.
     fn open(&mut self, path: &[u8]) -> Result<Self::File>;
     fn file_info(&mut self, file: &Self::File) -> Result<FileInfo>;
-    fn read_file(&mut self, file: &mut Self::File, buf: &mut [u8]) -> Result<usize>;
-    /// Send up to `len` bytes from `file` starting at `offset` to `stream`
-    /// using the OS zero-copy path. Returns the number of bytes sent.
-    fn send_file(
-        &mut self,
-        stream: &mut Self::Stream,
-        file: &mut Self::File,
-        offset: u64,
-        len: u64,
-    ) -> Result<u64>;
-
     /// Open a directory (relative to the document root) for iteration.
     /// Symlinks anywhere beneath the root are refused.
     fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir>;

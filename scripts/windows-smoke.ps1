@@ -164,25 +164,7 @@ try {
         Stop-Process -Id $idleProc.Id -Force -ErrorAction SilentlyContinue
     }
 
-    # Blocking fallback still serves.
-    $blockPort = $Port + 2
-    $blockProc = Start-Process -FilePath $Exe `
-        -ArgumentList "--root", $root, "--port", $blockPort, "--blocking", "--quiet" -PassThru
-    $blocked = $null
-    for ($attempt = 0; $attempt -lt 20; $attempt++) {
-        Start-Sleep -Milliseconds 100
-        try {
-            $blocked = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$blockPort/hello.txt"
-            break
-        } catch {}
-    }
-    try {
-        if (-not $blocked -or $blocked.StatusCode -ne 200) { throw "blocking fallback failed" }
-    } finally {
-        Stop-Process -Id $blockProc.Id -Force -ErrorAction SilentlyContinue
-    }
-
-    Write-Output "windows smoke: GET/PUT/POST/range/junction/concurrency/idle/blocking OK"
+    Write-Output "windows smoke: GET/PUT/POST/range/junction/concurrency/idle OK"
 } finally {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $root, $outside -ErrorAction SilentlyContinue

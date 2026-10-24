@@ -9,12 +9,13 @@
 //! * `unsafe` is confined to the syscall ABI modules;
 //! * every buffer is fixed-size and caller-provided.
 //!
-//! The server is deliberately small: HTTP/1.0 and 1.1, `GET`/`HEAD`, static
-//! files, `Connection: close`. See `ROADMAP.md` for the async reactor plan.
+//! The server is deliberately small: HTTP/1.0 and 1.1, keep-alive, `GET`/`HEAD`,
+//! uploads, and static files over a fixed-slot readiness reactor.
 
 #![cfg_attr(not(test), no_std)]
 
 pub mod async_server;
+pub mod auth;
 pub mod config;
 pub mod fixedbuf;
 pub mod http;
@@ -26,7 +27,6 @@ pub mod platform;
 pub mod server;
 
 pub use config::{Config, ParseOutcome};
-pub use server::Server;
 
 /// Cargo package version, embedded at compile time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -47,26 +47,7 @@ pub fn run(args: &[&[u8]]) -> ! {
             platform::write_stdout(b"\n");
             platform::exit(0)
         }
-        Ok(ParseOutcome::Run(config)) => {
-            let async_mode = config.async_mode();
-            let mut server = Server::new(platform::Sys::new(), config);
-            #[cfg(unix)]
-            {
-                if async_mode {
-                    server.run_async()
-                } else {
-                    server.run()
-                }
-            }
-            #[cfg(windows)]
-            {
-                if async_mode {
-                    server.run_async()
-                } else {
-                    server.run()
-                }
-            }
-        }
+        Ok(ParseOutcome::Run(config)) => async_server::run(platform::Sys::new(), config),
         Err(error) => {
             platform::write_stderr(b"syswebd: ");
             platform::write_stderr(error.message());

@@ -140,8 +140,6 @@ unsafe extern "C" {
     fn c_send(fd: i32, buf: *const u8, len: usize, flags: i32) -> isize;
     #[link_name = "close"]
     fn c_close(fd: i32) -> i32;
-    #[link_name = "nanosleep"]
-    fn c_nanosleep(request: *const Timespec, remaining: *mut Timespec) -> i32;
     #[link_name = "fcntl"]
     fn c_fcntl(fd: i32, cmd: i32, ...) -> i32;
     #[link_name = "kqueue"]
@@ -206,22 +204,6 @@ fn map_errno(errno: i32) -> Error {
         32 => Error::BrokenPipe,
         22 | 63 => Error::InvalidInput,
         other => Error::Other(other),
-    }
-}
-
-pub fn sleep_ms(ms: u64) -> Result<()> {
-    let request = Timespec {
-        tv_sec: (ms / 1000) as i64,
-        tv_nsec: ((ms % 1000) * 1_000_000) as i64,
-    };
-    loop {
-        if unsafe { c_nanosleep(&request, null_mut()) } == 0 {
-            return Ok(());
-        }
-        match last_error() {
-            Error::Interrupted => continue,
-            error => return Err(error),
-        }
     }
 }
 

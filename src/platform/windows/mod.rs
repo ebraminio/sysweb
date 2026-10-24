@@ -1,4 +1,4 @@
-//! CRT-free Win32 backend (blocking first; IOCP reactor next).
+//! CRT-free Win32 async backend over WSAPoll; IOCP remains future work.
 
 #![allow(non_snake_case)]
 
@@ -158,7 +158,6 @@ unsafe extern "system" {
     fn FindClose(handle: *mut c_void) -> i32;
     fn GetLastError() -> u32;
     fn GetFileAttributesW(path: *const u16) -> u32;
-    fn Sleep(ms: u32);
     fn ExitProcess(code: u32) -> !;
     fn MultiByteToWideChar(
         page: u32,
@@ -654,63 +653,6 @@ impl Platform for Sys {
         Ok(Listener(fd))
     }
 
-    fn accept(&mut self, listener: &Self::Listener) -> Result<Self::Stream> {
-        loop {
-            let fd = unsafe { accept(listener.0, null_mut(), null_mut()) };
-            if fd != INVALID_SOCKET {
-                if let Err(error) = set_nodelay(fd) {
-                    unsafe { closesocket(fd) };
-                    return Err(error);
-                }
-                return Ok(Stream(fd));
-            }
-            match Self::last_wsa() {
-                Error::Interrupted => continue,
-                error => return Err(error),
-            }
-        }
-    }
-
-    fn read(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize> {
-        loop {
-            let count = unsafe { recv(stream.0, buf.as_mut_ptr(), buf.len() as i32, 0) };
-            if count >= 0 {
-                return Ok(count as usize);
-            }
-            match Self::last_wsa() {
-                Error::Interrupted => continue,
-                error => return Err(error),
-            }
-        }
-    }
-
-    fn write_all(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<()> {
-        let mut written = 0usize;
-        while written < buf.len() {
-            let count = unsafe {
-                send(
-                    stream.0,
-                    buf[written..].as_ptr(),
-                    (buf.len() - written) as i32,
-                    0,
-                )
-            };
-            if count > 0 {
-                written += count as usize;
-                continue;
-            }
-            match Self::last_wsa() {
-                Error::Interrupted => continue,
-                error => return Err(error),
-            }
-        }
-        Ok(())
-    }
-
-    fn sleep_ms(&mut self, ms: u64) {
-        unsafe { Sleep(ms as u32) };
-    }
-
     fn open(&mut self, path: &[u8]) -> Result<Self::File> {
         self.check_parents(path)?;
         let handle = self.open_handle(
@@ -729,58 +671,6 @@ impl Platform for Sys {
 
     fn file_info(&mut self, file: &Self::File) -> Result<FileInfo> {
         Self::info_for(file.handle)
-    }
-
-    fn read_file(&mut self, file: &mut Self::File, buf: &mut [u8]) -> Result<usize> {
-        let mut read = 0u32;
-        if unsafe {
-            ReadFile(
-                file.handle,
-                buf.as_mut_ptr() as *mut c_void,
-                buf.len() as u32,
-                &mut read,
-                null_mut(),
-            )
-        } == 0
-        {
-            return Err(Self::last_error());
-        }
-        Ok(read as usize)
-    }
-
-    fn send_file(
-        &mut self,
-        stream: &mut Self::Stream,
-        file: &mut Self::File,
-        offset: u64,
-        len: u64,
-    ) -> Result<u64> {
-        let mut position = offset as i64;
-        if unsafe { SetFilePointerEx(file.handle, position, &mut position, 0) } == 0 {
-            return Err(Self::last_error());
-        }
-        let mut remaining = len;
-        let mut buffer = [0u8; 16 * 1024];
-        while remaining > 0 {
-            let want = core::cmp::min(remaining, buffer.len() as u64) as usize;
-            let mut read = 0u32;
-            if unsafe {
-                ReadFile(
-                    file.handle,
-                    buffer.as_mut_ptr() as *mut c_void,
-                    want as u32,
-                    &mut read,
-                    null_mut(),
-                )
-            } == 0
-                || read == 0
-            {
-                return Err(Self::last_error());
-            }
-            self.write_all(stream, &buffer[..read as usize])?;
-            remaining -= read as u64;
-        }
-        Ok(len)
     }
 
     fn open_dir(&mut self, path: &[u8]) -> Result<Self::Dir> {
