@@ -422,6 +422,8 @@ fn serves_static_files_and_directory_indexes() {
         header(&head, "Content-Type"),
         Some("text/html; charset=utf-8")
     );
+    assert_eq!(header(&head, "Transfer-Encoding"), Some("chunked"));
+    assert!(body.ends_with(b"0\r\n\r\n"));
     let page = text(body);
     assert!(page.contains("data-path=\"/assets/\""));
     assert!(page.contains("data-upload=\"0\""));
@@ -1096,4 +1098,19 @@ fn basic_auth_challenges_and_accepts_credentials() {
         b"GET / HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic d3Jvbmc6bm9wZQ==\r\nConnection: close\r\n\r\n",
     );
     assert_status(&split(&response).0, "HTTP/1.1 401 Unauthorized");
+}
+
+#[test]
+fn http10_listing_uses_close_delimited_body() {
+    let server = start_server(&[]);
+    let response = request(
+        server.port,
+        b"GET /assets/ HTTP/1.0\r\nHost: localhost\r\n\r\n",
+    );
+    let (head, body) = split(&response);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(header(&head, "Transfer-Encoding"), None);
+    assert_eq!(header(&head, "Content-Length"), None);
+    assert_eq!(header(&head, "Connection"), Some("close"));
+    assert!(text(body).contains("hello world.txt"));
 }

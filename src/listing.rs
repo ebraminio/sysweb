@@ -7,7 +7,7 @@
 use crate::fixedbuf::FixedBuf;
 use crate::mime;
 use crate::path::MAX_PATH;
-use crate::platform::{DirEntry, EntryKind, Platform};
+use crate::platform::{DirEntry, EntryKind};
 
 pub const LISTING_BUF: usize = 64 * 1024;
 
@@ -558,22 +558,19 @@ const JS: &[u8] = br###"
 ///
 /// `url_path` must be a normalized path that ends in `/`. Returns `false` only
 /// when the fixed buffer cannot even hold the page chrome.
-pub fn render<P: Platform>(
-    platform: &mut P,
-    dir: &mut P::Dir,
+pub fn encode_path<const N: usize>(url_path: &[u8], out: &mut FixedBuf<N>) -> bool {
+    url_encode_path(out, url_path)
+}
+
+pub fn render_head<const N: usize>(
+    out: &mut FixedBuf<N>,
     url_path: &[u8],
     upload: bool,
-    out: &mut FixedBuf<LISTING_BUF>,
+    encoded_path: &[u8],
 ) -> bool {
     if !url_path.starts_with(b"/") || !url_path.ends_with(b"/") {
         return false;
     }
-
-    let mut encoded_path = FixedBuf::<MAX_PATH>::new();
-    if !url_encode_path(&mut encoded_path, url_path) {
-        return false;
-    }
-
     if !out.push(b"<!doctype html>\n<html lang=\"en\">\n<head>\n") {
         return false;
     }
@@ -586,7 +583,7 @@ pub fn render<P: Platform>(
         || !out.push(b"</title>\n<style>")
         || !out.push(CSS)
         || !out.push(b"</style>\n<!--[if lt IE 9]><style>#transfer-wrap{display:none}</style><![endif]-->\n</head>\n<body data-path=\"")
-        || !out.push(encoded_path.as_slice())
+        || !out.push(encoded_path)
         || !out.push(b"\" data-upload=\"")
         || !out.push(if upload { b"1" } else { b"0" })
         || !out.push(b"\">\n<header><a class=\"brand\" href=\"/\">sysweb</a>")
@@ -601,13 +598,13 @@ pub fn render<P: Platform>(
 
     if upload {
         if !out.push(b"<form id=\"classic-upload\" class=\"tools\" method=\"post\" enctype=\"multipart/form-data\" action=\"")
-            || !out.push(encoded_path.as_slice())
+            || !out.push(encoded_path)
             || !out.push(b"?sysweb-form=1\">")
             || !out.push(b"<label class=\"btn primary\">Upload (form)<input type=\"file\" name=\"file\"></label>")
             || !out.push(b"<button class=\"btn\" type=\"submit\">Upload</button>")
             || !out.push(b"</form>\n")
             || !out.push(b"<form id=\"classic-text\" class=\"tools\" method=\"get\" action=\"")
-            || !out.push(encoded_path.as_slice())
+            || !out.push(encoded_path)
             || !out.push(b"?sysweb-text=1\">")
             || !out.push(b"<label>Text file <input name=\"name\" type=\"text\" value=\"pasted.txt\"></label>")
             || !out.push(b"<textarea name=\"text\" rows=\"4\" placeholder=\"Paste or type text\"></textarea>")
@@ -650,26 +647,10 @@ pub fn render<P: Platform>(
         return false;
     }
 
-    let mut name = [0u8; 256];
-    let mut entries = 0usize;
-    let mut truncated = false;
-    loop {
-        if out.remaining() < 16_384 {
-            truncated = true;
-            break;
-        }
-        match platform.next_dir(dir, &mut name) {
-            Ok(Some(entry)) => {
-                if !render_entry(out, encoded_path.as_slice(), &name[..entry.name_len], entry) {
-                    return false;
-                }
-                entries += 1;
-            }
-            Ok(None) => break,
-            Err(_) => return false,
-        }
-    }
+    true
+}
 
+pub fn render_tail<const N: usize>(out: &mut FixedBuf<N>, entries: usize, truncated: bool) -> bool {
     if entries == 0
         && !out.push(b"<tr class=\"empty\"><td colspan=\"4\">This directory is empty.</td></tr>\n")
     {
@@ -761,7 +742,7 @@ fn parent_path(url_path: &[u8], out: &mut FixedBuf<MAX_PATH>) -> bool {
     url_encode_path(out, &url_path[..slash + 1])
 }
 
-fn render_entry<const N: usize>(
+pub fn render_entry<const N: usize>(
     out: &mut FixedBuf<N>,
     encoded_path: &[u8],
     name: &[u8],
@@ -1035,7 +1016,9 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_from_days, format_size, format_time};
+    use super::{
+        civil_from_days, format_size, format_time, render_head, render_tail, FixedBuf, LISTING_BUF,
+    };
 
     #[test]
     fn sizes_are_si() {
@@ -1053,6 +1036,16 @@ mod tests {
             let len = format_size(*value, &mut buf);
             assert_eq!(&buf[..len], *expected, "size {value}");
         }
+    }
+
+    #[test]
+    fn streaming_head_and_tail_fit_a_chunk() {
+        let mut head = FixedBuf::<LISTING_BUF>::new();
+        assert!(render_head(&mut head, b"/", true, b"/"));
+        let mut tail = FixedBuf::<LISTING_BUF>::new();
+        assert!(render_tail(&mut tail, 0, false));
+        assert!(head.len() < 16 * 1024, "head={}", head.len());
+        assert!(tail.len() < 16 * 1024, "tail={}", tail.len());
     }
 
     #[test]

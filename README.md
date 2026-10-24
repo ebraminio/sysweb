@@ -19,6 +19,8 @@ binary, so there are no assets to install.
 
 - HTTP/1.0 and HTTP/1.1, keep-alive, sequential pipelining, and ranges;
 - static files, `index.html`, and a built-in sortable directory index;
+- directory listings are streamed: chunked for HTTP/1.1, close-delimited for
+  HTTP/1.0;
 - opt-in raw `PUT` uploads, multipart `POST` uploads, and folder creation;
 - upload from the browser: files, folders, clipboard images/text, drag-and-drop,
   and a paste-text dialog;

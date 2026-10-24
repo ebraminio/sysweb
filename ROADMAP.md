@@ -86,8 +86,8 @@ Make the async server pleasant and safe enough to run on a LAN.
 - [ ] Multi-file multipart forms and RFC 5987 `filename*` names.
 - [ ] Optional: keep the legacy page usable on very old layout engines with a
       simpler stylesheet.
-- [ ] Listing pagination or chunked rendering for directories whose page
-      exceeds 64 KiB.
+- [x] Chunked/streamed directory listings for HTTP/1.1 and close-delimited
+      streaming for HTTP/1.0.
 
 ### Parity and hardening
 

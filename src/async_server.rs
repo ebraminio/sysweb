@@ -7,18 +7,20 @@
 use crate::config::Config;
 use crate::fixedbuf::FixedBuf;
 use crate::http::{self, Method, Status};
-use crate::listing::{self, LISTING_BUF};
+use crate::listing;
 use crate::mime;
 use crate::multipart::{self, Sink, SinkError};
 use crate::path::{self, MAX_PATH, MAX_URL_PATH};
 use crate::platform::{AsyncPlatform, Error, Event, Interest};
-use crate::server::{build_header, resolve_range, root_relative, HEADER_BUF, REQUEST_BUF};
+use crate::server::{
+    build_header, build_stream_header, resolve_range, root_relative, HEADER_BUF, REQUEST_BUF,
+};
 
 #[cfg(windows)]
 const MAX_CONNECTIONS: usize = 4;
 #[cfg(not(windows))]
 const MAX_CONNECTIONS: usize = 8;
-const RESPONSE_BUF: usize = LISTING_BUF + HEADER_BUF;
+const RESPONSE_BUF: usize = HEADER_BUF + 512;
 const EVENT_BATCH: usize = 64;
 const TICK_MS: i32 = 1000;
 const BODY_BUF: usize = 16 * 1024;
@@ -37,6 +39,15 @@ enum State {
     SendingContinue,
     ReadingBody,
     Draining,
+    StreamingListing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ListingPhase {
+    Head,
+    Entries,
+    Tail,
+    Final,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -153,6 +164,19 @@ struct Slot<P: AsyncPlatform> {
     file_remaining: u64,
     upload: Option<Upload<P>>,
     body: [u8; BODY_BUF],
+    dir: Option<P::Dir>,
+    listing_encoded: [u8; MAX_PATH],
+    listing_encoded_len: usize,
+    listing_entries: usize,
+    listing_phase: ListingPhase,
+    listing_prefix: [u8; 32],
+    listing_prefix_len: usize,
+    listing_prefix_pos: usize,
+    listing_data_len: usize,
+    listing_data_pos: usize,
+    listing_suffix_pos: usize,
+    listing_chunked: bool,
+    listing_final: bool,
     continue_pos: usize,
     drain_remaining: u64,
     head_only: bool,
@@ -184,6 +208,19 @@ impl<P: AsyncPlatform> Slot<P> {
             file_remaining: 0,
             upload: None,
             body: [0; BODY_BUF],
+            dir: None,
+            listing_encoded: [0; MAX_PATH],
+            listing_encoded_len: 0,
+            listing_entries: 0,
+            listing_phase: ListingPhase::Head,
+            listing_prefix: [0; 32],
+            listing_prefix_len: 0,
+            listing_prefix_pos: 0,
+            listing_data_len: 0,
+            listing_data_pos: 0,
+            listing_suffix_pos: 0,
+            listing_chunked: false,
+            listing_final: false,
             continue_pos: 0,
             drain_remaining: 0,
             head_only: false,
@@ -211,6 +248,17 @@ impl<P: AsyncPlatform> Slot<P> {
         self.file_offset = 0;
         self.file_remaining = 0;
         self.upload = None;
+        self.dir = None;
+        self.listing_encoded_len = 0;
+        self.listing_entries = 0;
+        self.listing_phase = ListingPhase::Head;
+        self.listing_prefix_len = 0;
+        self.listing_prefix_pos = 0;
+        self.listing_data_len = 0;
+        self.listing_data_pos = 0;
+        self.listing_suffix_pos = 0;
+        self.listing_chunked = false;
+        self.listing_final = false;
         self.continue_pos = 0;
         self.drain_remaining = 0;
         self.head_only = false;
@@ -493,6 +541,9 @@ fn handle_event<P: AsyncPlatform>(
         }
         State::ReadingBody => read_body_slot(platform, poller, &mut slots[index], index + 1),
         State::Draining => drain_slot(platform, poller, &mut slots[index], index + 1),
+        State::StreamingListing => {
+            listing_slot(platform, poller, config, &mut slots[index], index + 1)
+        }
         State::Idle => {}
     }
 }
@@ -757,6 +808,7 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
                 rel_path,
                 config.upload(),
                 head_only,
+                request.version == http::Version::Http11,
             );
         }
         Err(Error::PermissionDenied) => slot.prepare_error(Status::Forbidden, head_only),
@@ -1268,6 +1320,7 @@ fn write_continue_slot<P: AsyncPlatform>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn serve_listing<P: AsyncPlatform>(
     platform: &mut P,
     slot: &mut Slot<P>,
@@ -1275,8 +1328,9 @@ fn serve_listing<P: AsyncPlatform>(
     rel_path: &[u8],
     upload: bool,
     head_only: bool,
+    chunked: bool,
 ) {
-    let mut dir = match platform.open_dir(rel_path) {
+    let dir = match platform.open_dir(rel_path) {
         Ok(dir) => dir,
         Err(Error::NotFound) | Err(Error::IsADirectory) => {
             slot.prepare_error(Status::NotFound, head_only);
@@ -1291,22 +1345,86 @@ fn serve_listing<P: AsyncPlatform>(
             return;
         }
     };
-    let mut html = FixedBuf::<LISTING_BUF>::new();
-    if !listing::render(platform, &mut dir, url_path, upload, &mut html) {
+
+    let mut encoded = FixedBuf::<MAX_PATH>::new();
+    if !listing::encode_path(url_path, &mut encoded) {
         slot.prepare_error(Status::InternalServerError, head_only);
         return;
     }
-    let _ = slot.prepare_response(
-        Status::Ok,
-        html.len() as u64,
+    let mut head = FixedBuf::<BODY_BUF>::new();
+    if !listing::render_head(&mut head, url_path, upload, encoded.as_slice()) {
+        slot.prepare_error(Status::InternalServerError, head_only);
+        return;
+    }
+    slot.keep_alive = chunked && slot.keep_alive;
+    let mut header = FixedBuf::<HEADER_BUF>::new();
+    if !build_stream_header(
+        &mut header,
         b"text/html; charset=utf-8",
-        html.as_slice(),
-        head_only,
-        None,
-        None,
-        false,
-    );
-    slot.log_len = html.len() as u64;
+        chunked,
+        slot.keep_alive,
+    ) {
+        slot.prepare_error(Status::InternalServerError, head_only);
+        return;
+    }
+    slot.response[..header.len()].copy_from_slice(header.as_slice());
+    slot.response_len = header.len();
+    slot.response_pos = 0;
+    if head_only {
+        slot.state = State::Writing;
+        slot.log_len = 0;
+        return;
+    }
+    slot.body[..head.len()].copy_from_slice(head.as_slice());
+    slot.listing_data_len = head.len();
+    slot.listing_data_pos = 0;
+    slot.listing_prefix_len = if chunked {
+        chunk_prefix(head.len(), &mut slot.listing_prefix)
+    } else {
+        0
+    };
+    slot.listing_prefix_pos = 0;
+    slot.listing_suffix_pos = if chunked { 0 } else { 2 };
+    slot.listing_encoded[..encoded.len()].copy_from_slice(encoded.as_slice());
+    slot.listing_encoded_len = encoded.len();
+    slot.listing_entries = 0;
+    slot.listing_phase = ListingPhase::Entries;
+    slot.listing_chunked = chunked;
+    slot.listing_final = false;
+    slot.dir = Some(dir);
+    slot.state = State::StreamingListing;
+    slot.status = Status::Ok;
+    slot.log_len = head.len() as u64;
+}
+
+fn chunk_prefix(len: usize, out: &mut [u8; 32]) -> usize {
+    let mut digits = [0u8; 16];
+    let mut value = len;
+    let mut count = 0usize;
+    if value == 0 {
+        digits[0] = b'0';
+        count = 1;
+    } else {
+        while value > 0 {
+            let digit = (value & 0xf) as u8;
+            digits[count] = if digit < 10 {
+                b'0' + digit
+            } else {
+                b'a' + digit - 10
+            };
+            value >>= 4;
+            count += 1;
+        }
+    }
+    let mut at = 0usize;
+    while count > 0 {
+        count -= 1;
+        out[at] = digits[count];
+        at += 1;
+    }
+    out[at] = b'\r';
+    out[at + 1] = b'\n';
+    at + 2
 }
 
 fn prepare_file<P: AsyncPlatform>(
@@ -1375,6 +1493,164 @@ fn prepare_file<P: AsyncPlatform>(
     slot.file_remaining = if head_only { 0 } else { length };
     slot.status = status;
     slot.log_len = length;
+}
+
+fn listing_slot<P: AsyncPlatform>(
+    platform: &mut P,
+    poller: &mut P::Poller,
+    config: &Config,
+    slot: &mut Slot<P>,
+    token: usize,
+) {
+    loop {
+        let stream = match slot.stream.as_mut() {
+            Some(stream) => stream,
+            None => return,
+        };
+        if slot.response_pos < slot.response_len {
+            match platform
+                .write_nonblocking(stream, &slot.response[slot.response_pos..slot.response_len])
+            {
+                Ok(0) => {
+                    close_slot(platform, poller, slot, token);
+                    return;
+                }
+                Ok(count) => slot.response_pos += count,
+                Err(Error::Interrupted) => continue,
+                Err(Error::WouldBlock) => return,
+                Err(_) => {
+                    close_slot(platform, poller, slot, token);
+                    return;
+                }
+            }
+        }
+        if slot.listing_prefix_pos < slot.listing_prefix_len {
+            match platform.write_nonblocking(
+                stream,
+                &slot.listing_prefix[slot.listing_prefix_pos..slot.listing_prefix_len],
+            ) {
+                Ok(0) => {
+                    close_slot(platform, poller, slot, token);
+                    return;
+                }
+                Ok(count) => slot.listing_prefix_pos += count,
+                Err(Error::Interrupted) => continue,
+                Err(Error::WouldBlock) => return,
+                Err(_) => {
+                    close_slot(platform, poller, slot, token);
+                    return;
+                }
+            }
+        }
+        if slot.listing_data_pos < slot.listing_data_len {
+            match platform.write_nonblocking(
+                stream,
+                &slot.body[slot.listing_data_pos..slot.listing_data_len],
+            ) {
+                Ok(0) => {
+                    close_slot(platform, poller, slot, token);
+                    return;
+                }
+                Ok(count) => slot.listing_data_pos += count,
+                Err(Error::Interrupted) => continue,
+                Err(Error::WouldBlock) => return,
+                Err(_) => {
+                    close_slot(platform, poller, slot, token);
+                    return;
+                }
+            }
+        }
+        if slot.listing_suffix_pos < 2 {
+            match platform.write_nonblocking(stream, &b"\r\n"[slot.listing_suffix_pos..]) {
+                Ok(0) => {
+                    close_slot(platform, poller, slot, token);
+                    return;
+                }
+                Ok(count) => slot.listing_suffix_pos += count,
+                Err(Error::Interrupted) => continue,
+                Err(Error::WouldBlock) => return,
+                Err(_) => {
+                    close_slot(platform, poller, slot, token);
+                    return;
+                }
+            }
+        }
+        if slot.listing_final {
+            finish_response(platform, poller, config, slot, token);
+            return;
+        }
+        if slot.listing_phase == ListingPhase::Final {
+            if slot.listing_chunked {
+                slot.listing_prefix[..5].copy_from_slice(b"0\r\n\r\n");
+                slot.listing_prefix_len = 5;
+                slot.listing_prefix_pos = 0;
+                slot.listing_data_len = 0;
+                slot.listing_data_pos = 0;
+                slot.listing_suffix_pos = 2;
+                slot.listing_final = true;
+                continue;
+            }
+            finish_response(platform, poller, config, slot, token);
+            return;
+        }
+
+        let mut chunk = FixedBuf::<BODY_BUF>::new();
+        let rendered = if slot.listing_phase == ListingPhase::Entries {
+            let mut name = [0u8; 256];
+            let next = {
+                let Some(dir) = slot.dir.as_mut() else {
+                    close_slot(platform, poller, slot, token);
+                    return;
+                };
+                platform.next_dir(dir, &mut name)
+            };
+            match next {
+                Ok(Some(entry)) => {
+                    slot.listing_entries += 1;
+                    listing::render_entry(
+                        &mut chunk,
+                        &slot.listing_encoded[..slot.listing_encoded_len],
+                        &name[..entry.name_len],
+                        entry,
+                    )
+                }
+                Ok(None) => {
+                    slot.listing_phase = ListingPhase::Tail;
+                    continue;
+                }
+                Err(_) => {
+                    close_slot(platform, poller, slot, token);
+                    return;
+                }
+            }
+        } else {
+            let entries = slot.listing_entries;
+            slot.listing_phase = ListingPhase::Final;
+            listing::render_tail(&mut chunk, entries, false)
+        };
+        if !rendered || chunk.is_empty() {
+            if slot.listing_phase == ListingPhase::Final {
+                continue;
+            }
+            close_slot(platform, poller, slot, token);
+            return;
+        }
+        if chunk.len() > slot.body.len() {
+            close_slot(platform, poller, slot, token);
+            return;
+        }
+        slot.body[..chunk.len()].copy_from_slice(chunk.as_slice());
+        slot.listing_data_len = chunk.len();
+        slot.listing_data_pos = 0;
+        slot.listing_suffix_pos = if slot.listing_chunked { 0 } else { 2 };
+        slot.listing_prefix_len = if slot.listing_chunked {
+            chunk_prefix(chunk.len(), &mut slot.listing_prefix)
+        } else {
+            0
+        };
+        slot.listing_prefix_pos = 0;
+        slot.log_len += chunk.len() as u64;
+    }
 }
 
 fn write_slot<P: AsyncPlatform>(
@@ -1521,6 +1797,9 @@ fn finish_response<P: AsyncPlatform>(
     slot.request_len -= consumed;
     slot.file = None;
     slot.upload = None;
+    slot.dir = None;
+    slot.listing_prefix_len = 0;
+    slot.listing_data_len = 0;
     slot.response_len = 0;
     slot.response_pos = 0;
     slot.file_offset = 0;
@@ -1586,6 +1865,7 @@ fn transition<P: AsyncPlatform>(
             }
             Interest::Writable
         }
+        State::StreamingListing => Interest::Writable,
         _ => return,
     };
     let Some(stream) = slot.stream.as_ref() else {
@@ -1618,6 +1898,9 @@ fn close_slot<P: AsyncPlatform>(
     slot.response_pos = 0;
     slot.file_offset = 0;
     slot.file_remaining = 0;
+    slot.dir = None;
+    slot.listing_prefix_len = 0;
+    slot.listing_data_len = 0;
     slot.keep_alive = false;
     slot.requests = 0;
     slot.body_end = 0;

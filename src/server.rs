@@ -126,6 +126,34 @@ pub(crate) fn resolve_range(spec: RangeSpec, total: u64) -> Option<(u64, u64)> {
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) fn build_stream_header(
+    buffer: &mut FixedBuf<HEADER_BUF>,
+    content_type: &[u8],
+    chunked: bool,
+    keep_alive: bool,
+) -> bool {
+    buffer.clear();
+    if !buffer.push(b"HTTP/1.1 200 OK\r\n")
+        || !buffer.push(b"Server: sysweb/")
+        || !buffer.push(crate::VERSION.as_bytes())
+        || !buffer.push(b"\r\n")
+        || !buffer.push(b"Content-Type: ")
+        || !buffer.push(content_type)
+        || !buffer.push(b"\r\n")
+    {
+        return false;
+    }
+    if chunked && !buffer.push(b"Transfer-Encoding: chunked\r\n") {
+        return false;
+    }
+    if keep_alive {
+        buffer.push(b"Connection: keep-alive\r\n\r\n")
+    } else {
+        buffer.push(b"Connection: close\r\n\r\n")
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_header(
     buffer: &mut FixedBuf<HEADER_BUF>,
     status: Status,

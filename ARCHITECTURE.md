@@ -55,7 +55,7 @@ table, the project does not target it.
 │   accept loop, fixed buffers, uploads, response writer, logs │
 ├──────────────────────────────────────────────────────────────┤
 │ src/listing.rs                                               │
-│   self-contained directory page in a 64 KiB fixed buffer     │
+│   streamed directory listing; no page-sized slot buffer      │
 ├──────────────────────────────────────────────────────────────┤
 │ src/http.rs  src/path.rs  src/mime.rs  src/config.rs         │
 │   pure, safe, allocation-free                                │
@@ -361,7 +361,9 @@ missing file part 400, and conflicts follow the same `--replace` rules as PUT.
 
 ## Directory index
 
-`listing::render` builds a complete HTML page in a 64 KiB `FixedBuf`:
+HTTP/1.1 directory pages are built as head/entry/tail fragments and streamed
+with `Transfer-Encoding: chunked`; HTTP/1.0 uses close-delimited streaming.
+Each chunk is generated from fixed fragments:
 
 - breadcrumb links are URL-encoded segment by segment and HTML-escaped;
 - entries come from a 4 KiB `getdents` buffer; names are copied into a 256-byte
@@ -414,7 +416,7 @@ multipart parser is only the compatibility path for classic form `POST`s.
 | response header | 4 KiB | one response |
 | redirect `Location` | ~3 KiB | one redirect |
 | directory entries | 4 KiB | one listing |
-| directory page | 64 KiB | one listing |
+| listing chunk | 16 KiB | one streamed fragment |
 | multipart parser | 32 KiB | one form upload |
 | multipart headers | 4 KiB (inside parser buffer) | one part |
 | upload/file chunk | 16 KiB | one PUT/upload read |
@@ -550,7 +552,7 @@ enum State {
     Streaming,
     ReadingBody,   // upload: body bytes from the socket
     WritingFile,   // upload: body bytes to disk
-    Listing,       // bounded 64 KiB render + send
+    Listing,       // streamed chunks, chunked or close-delimited
     Closing,
 }
 
@@ -573,8 +575,8 @@ come from the reactor wait timeout plus a per-slot deadline.
 The HTTP parser already returns a borrowed `Request<'a>`, uploads are a bounded
 read/write loop, and the multipart parser is already incremental, so the async
 state machine can keep using the same code; only the I/O driver changes.
-Directory rendering stays a bounded in-memory step (64 KiB), so it does not
-need incremental state.
+HTTP/1.1 directory rendering streams head/entry/tail chunks and does not need
+a 64 KiB page buffer; HTTP/1.0 streams close-delimited fragments.
 
 ## Windows plan (milestone 2)
 
@@ -663,8 +665,8 @@ several.
 - **Partial files**: a failed upload is unlinked, but a successful upload is
   written in place, not via temp+rename. `--replace` can therefore truncate an
   existing file before a failure. Atomic uploads are roadmap.
-- **Listing truncation**: directories whose rendered page exceeds 64 KiB are
-  truncated visibly. A pagination or chunked-listing design is future work.
+- **No listing pagination**: listings stream all entries, so a very large
+  directory can take many chunks and a long time to render.
 - **No `Date` header**: HTTP/1.1 says servers SHOULD send one. It is a roadmap
   item because it needs a clock syscall and civil-date conversion.
 - **Keep-alive is capped**: the async path closes after 1000 requests on one

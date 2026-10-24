@@ -82,8 +82,8 @@ Add pure logic to `src/http.rs`, `src/path.rs`, or `src/listing.rs` with unit
 tests first. The server should stay a thin state machine over `Platform`; avoid
 putting parsing or path policy in the I/O loop. If a feature needs a new
 response header, update the 4 KiB header budget and the e2e assertions.
-Directory pages fit in 64 KiB; if a change can exceed that, add truncation
-behavior and a test.
+Directory pages are rendered in head/entry/tail fragments and streamed:
+chunked for HTTP/1.1, close-delimited for HTTP/1.0. Keep both paths tested.
 
 Uploads deserve extra care: require `Content-Length`, stream in fixed chunks, unlink partial files, and keep the feature behind `--upload`.
 The multipart parser must stay incremental: never buffer a whole body, add
