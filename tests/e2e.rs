@@ -243,6 +243,27 @@ fn text(response: &[u8]) -> String {
     String::from_utf8_lossy(response).into_owned()
 }
 
+fn decode_chunked(mut body: &[u8]) -> Vec<u8> {
+    let mut decoded = Vec::new();
+    loop {
+        let line = body
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .expect("chunk line");
+        let size = usize::from_str_radix(
+            core::str::from_utf8(&body[..line]).expect("chunk size ascii"),
+            16,
+        )
+        .expect("chunk size");
+        body = &body[line + 2..];
+        if size == 0 {
+            return decoded;
+        }
+        decoded.extend_from_slice(&body[..size]);
+        body = &body[size + 2..];
+    }
+}
+
 #[test]
 fn serves_static_files_and_directory_indexes() {
     let server = start_server(&[]);
@@ -424,7 +445,7 @@ fn serves_static_files_and_directory_indexes() {
     );
     assert_eq!(header(&head, "Transfer-Encoding"), Some("chunked"));
     assert!(body.ends_with(b"0\r\n\r\n"));
-    let page = text(body);
+    let page = text(&decode_chunked(body));
     assert!(page.contains("data-path=\"/assets/\""));
     assert!(page.contains("data-upload=\"0\""));
     assert!(page.contains("hello world.txt"));
@@ -448,7 +469,8 @@ fn serves_static_files_and_directory_indexes() {
         let response = get(port, "/assets/leak");
         let (head, _) = split(&response);
         assert_status(&head, "HTTP/1.1 403 Forbidden");
-        assert!(text(&get(port, "/assets/")).contains("symlinks are not served"));
+        assert!(text(&decode_chunked(&split(&get(port, "/assets/")).1))
+            .contains("symlinks are not served"));
 
         // A symlinked directory must not be traversed, even for a real file
         // behind it.
@@ -460,7 +482,7 @@ fn serves_static_files_and_directory_indexes() {
     let response = get(port, "/assets/nested/");
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 200 OK");
-    assert!(text(body).contains("This directory is empty."));
+    assert!(text(&decode_chunked(body)).contains("This directory is empty."));
 
     let response = request(
         port,
@@ -539,7 +561,7 @@ fn uploads_create_files_and_directories() {
     let response = get(port, "/assets/brand-new/");
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 200 OK");
-    assert!(text(body).contains("This directory is empty."));
+    assert!(text(&decode_chunked(body)).contains("This directory is empty."));
 
     // Nested paths used by the folder uploader.
     let response = put(port, "/assets/tree/", b"");
@@ -552,7 +574,7 @@ fn uploads_create_files_and_directories() {
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 200 OK");
     assert_eq!(body, b"nested");
-    assert!(text(&get(port, "/assets/")).contains("data-upload=\"1\""));
+    assert!(text(&decode_chunked(&split(&get(port, "/assets/")).1)).contains("data-upload=\"1\""));
 
     let response = put(port, "/assets/nested/", b"");
     assert_status(&split(&response).0, "HTTP/1.1 409 Conflict");
@@ -635,7 +657,7 @@ fn multipart_forms_work_for_old_browsers() {
 
     // The page contains a classic multipart form and the inline JS stays in
     // the ES3/feature-detected subset so old browsers do not fail parsing.
-    let page = text(&get(port, "/assets/"));
+    let page = text(&decode_chunked(&split(&get(port, "/assets/")).1));
     assert!(page.contains("enctype=\"multipart/form-data\""));
     assert!(page.contains("id=\"classic-upload\""));
     assert!(!page.contains("Promise"));

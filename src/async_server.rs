@@ -1379,7 +1379,7 @@ fn serve_listing<P: Platform>(
     slot.listing_data_pos = 0;
     slot.listing_prefix_len = 0;
     slot.listing_prefix_pos = 0;
-    slot.listing_suffix_pos = if chunked { 0 } else { 2 };
+    slot.listing_suffix_pos = 2;
     slot.listing_encoded[..encoded.len()].copy_from_slice(encoded.as_slice());
     slot.listing_encoded_len = encoded.len();
     slot.listing_source = None;
