@@ -3,9 +3,9 @@
 **A `no_std`, no-heap, syscall-first file-transfer server in Rust.**
 
 `sysweb` is a small static file server and browser upload tool in one binary.
-It has no runtime, no heap allocator, no third-party crates, and — on Linux —
-no libc at all. The directory listing and upload UI are compiled into the
-binary, so there are no assets to install.
+It has no runtime, no heap allocator, no third-party crates, no libc on Linux,
+and no C runtime (CRT) on Windows. The directory listing and upload UI are
+compiled into the binary, so there are no assets to install.
 
 - `#![no_std]`: `core` only, no `std`;
 - no allocator: fixed buffers for requests, paths, headers, and listings;
