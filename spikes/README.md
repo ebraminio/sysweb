@@ -35,4 +35,11 @@ A macOS-only download server with compact state (~2.3 KiB/connection),
 `sendfile`, optional keep-alive, and a 12,000-record table. It benchmarks the
 cost of separating download state from upload/listing buffers.
 
+## `io-uring`
+
+A Linux-only download server using io_uring accept/recv/read/send with compact
+state and no keep-alive. It reaches 10k connections on loopback and includes an
+API comparison with XDP/eBPF/AF_XDP, which could not be loaded on the available
+Wi-Fi-only host.
+
 Each directory has its own build/run notes.
