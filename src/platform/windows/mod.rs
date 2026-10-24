@@ -548,6 +548,11 @@ fn set_nodelay(fd: usize) -> Result<()> {
     Ok(())
 }
 
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetStdHandle(which: u32) -> *mut c_void;
+}
+
 impl Platform for Sys {
     type Listener = Listener;
     type Stream = Stream;
