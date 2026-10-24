@@ -20,7 +20,7 @@ const MAX_CONNECTIONS: usize = 16;
 const RESPONSE_BUF: usize = HEADER_BUF + 512;
 const EVENT_BATCH: usize = 64;
 const TICK_MS: i32 = 1000;
-const BODY_BUF: usize = 16 * 1024;
+const BODY_BUF: usize = 8 * 1024;
 const CONTINUE: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
 const UPLOADED: &[u8] = b"UPLOADED\n";
 const CREATED: &[u8] = b"CREATED\n";
@@ -41,9 +41,13 @@ enum State {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ListingPhase {
-    Head,
+    HeadPrefix,
+    Css,
+    HeadSuffix,
     Entries,
-    Tail,
+    TailPrefix,
+    Js,
+    TailSuffix,
     Final,
 }
 
@@ -164,6 +168,8 @@ struct Slot<P: Platform> {
     dir: Option<P::Dir>,
     listing_encoded: [u8; MAX_PATH],
     listing_encoded_len: usize,
+    listing_source: Option<&'static [u8]>,
+    listing_source_pos: usize,
     listing_entries: usize,
     listing_phase: ListingPhase,
     listing_prefix: [u8; 32],
@@ -208,8 +214,10 @@ impl<P: Platform> Slot<P> {
             dir: None,
             listing_encoded: [0; MAX_PATH],
             listing_encoded_len: 0,
+            listing_source: None,
+            listing_source_pos: 0,
             listing_entries: 0,
-            listing_phase: ListingPhase::Head,
+            listing_phase: ListingPhase::HeadPrefix,
             listing_prefix: [0; 32],
             listing_prefix_len: 0,
             listing_prefix_pos: 0,
@@ -247,8 +255,10 @@ impl<P: Platform> Slot<P> {
         self.upload = None;
         self.dir = None;
         self.listing_encoded_len = 0;
+        self.listing_source = None;
+        self.listing_source_pos = 0;
         self.listing_entries = 0;
-        self.listing_phase = ListingPhase::Head;
+        self.listing_phase = ListingPhase::HeadPrefix;
         self.listing_prefix_len = 0;
         self.listing_prefix_pos = 0;
         self.listing_data_len = 0;
@@ -803,7 +813,6 @@ fn prepare_request<P: Platform>(platform: &mut P, config: &Config, slot: &mut Sl
                 slot,
                 &url_path[..url_len],
                 rel_path,
-                config.upload(),
                 head_only,
                 request.version == http::Version::Http11,
             );
@@ -1323,7 +1332,6 @@ fn serve_listing<P: Platform>(
     slot: &mut Slot<P>,
     url_path: &[u8],
     rel_path: &[u8],
-    upload: bool,
     head_only: bool,
     chunked: bool,
 ) {
@@ -1348,11 +1356,6 @@ fn serve_listing<P: Platform>(
         slot.prepare_error(Status::InternalServerError, head_only);
         return;
     }
-    let mut head = FixedBuf::<BODY_BUF>::new();
-    if !listing::render_head(&mut head, url_path, upload, encoded.as_slice()) {
-        slot.prepare_error(Status::InternalServerError, head_only);
-        return;
-    }
     slot.keep_alive = chunked && slot.keep_alive;
     let mut header = FixedBuf::<HEADER_BUF>::new();
     if !build_stream_header(
@@ -1372,26 +1375,23 @@ fn serve_listing<P: Platform>(
         slot.log_len = 0;
         return;
     }
-    slot.body[..head.len()].copy_from_slice(head.as_slice());
-    slot.listing_data_len = head.len();
+    slot.listing_data_len = 0;
     slot.listing_data_pos = 0;
-    slot.listing_prefix_len = if chunked {
-        chunk_prefix(head.len(), &mut slot.listing_prefix)
-    } else {
-        0
-    };
+    slot.listing_prefix_len = 0;
     slot.listing_prefix_pos = 0;
     slot.listing_suffix_pos = if chunked { 0 } else { 2 };
     slot.listing_encoded[..encoded.len()].copy_from_slice(encoded.as_slice());
     slot.listing_encoded_len = encoded.len();
+    slot.listing_source = None;
+    slot.listing_source_pos = 0;
     slot.listing_entries = 0;
-    slot.listing_phase = ListingPhase::Entries;
+    slot.listing_phase = ListingPhase::HeadPrefix;
     slot.listing_chunked = chunked;
     slot.listing_final = false;
     slot.dir = Some(dir);
     slot.state = State::StreamingListing;
     slot.status = Status::Ok;
-    slot.log_len = head.len() as u64;
+    slot.log_len = 0;
 }
 
 fn chunk_prefix(len: usize, out: &mut [u8; 32]) -> usize {
@@ -1592,41 +1592,98 @@ fn listing_slot<P: Platform>(
         }
 
         let mut chunk = FixedBuf::<BODY_BUF>::new();
-        let rendered = if slot.listing_phase == ListingPhase::Entries {
-            let mut name = [0u8; 256];
-            let next = {
-                let Some(dir) = slot.dir.as_mut() else {
-                    close_slot(platform, poller, slot, token);
-                    return;
-                };
-                platform.next_dir(dir, &mut name)
-            };
-            match next {
-                Ok(Some(entry)) => {
-                    slot.listing_entries += 1;
-                    listing::render_entry(
-                        &mut chunk,
-                        &slot.listing_encoded[..slot.listing_encoded_len],
-                        &name[..entry.name_len],
-                        entry,
-                    )
+        let mut from_source = false;
+        if let Some(source) = slot.listing_source {
+            if slot.listing_source_pos < source.len() {
+                let take = core::cmp::min(source.len() - slot.listing_source_pos, BODY_BUF);
+                chunk.push(&source[slot.listing_source_pos..slot.listing_source_pos + take]);
+                slot.listing_source_pos += take;
+                from_source = true;
+            } else {
+                slot.listing_source = None;
+                slot.listing_source_pos = 0;
+            }
+        }
+
+        let rendered = if from_source {
+            true
+        } else {
+            match slot.listing_phase {
+                ListingPhase::HeadPrefix => {
+                    let path = &slot.log_path[..slot.log_path_len];
+                    let ok = listing::render_head_prefix(&mut chunk, path);
+                    slot.listing_phase = ListingPhase::Css;
+                    ok
                 }
-                Ok(None) => {
-                    slot.listing_phase = ListingPhase::Tail;
+                ListingPhase::Css => {
+                    slot.listing_source = Some(listing::CSS);
+                    slot.listing_source_pos = 0;
+                    slot.listing_phase = ListingPhase::HeadSuffix;
                     continue;
                 }
-                Err(_) => {
-                    close_slot(platform, poller, slot, token);
-                    return;
+                ListingPhase::HeadSuffix => {
+                    let path = &slot.log_path[..slot.log_path_len];
+                    let ok = listing::render_head_suffix(
+                        &mut chunk,
+                        path,
+                        config.upload(),
+                        &slot.listing_encoded[..slot.listing_encoded_len],
+                    );
+                    slot.listing_phase = ListingPhase::Entries;
+                    ok
                 }
+                ListingPhase::Entries => {
+                    let mut name = [0u8; 256];
+                    let next = {
+                        let Some(dir) = slot.dir.as_mut() else {
+                            close_slot(platform, poller, slot, token);
+                            return;
+                        };
+                        platform.next_dir(dir, &mut name)
+                    };
+                    match next {
+                        Ok(Some(entry)) => {
+                            slot.listing_entries += 1;
+                            listing::render_entry(
+                                &mut chunk,
+                                &slot.listing_encoded[..slot.listing_encoded_len],
+                                &name[..entry.name_len],
+                                entry,
+                            )
+                        }
+                        Ok(None) => {
+                            slot.listing_phase = ListingPhase::TailPrefix;
+                            continue;
+                        }
+                        Err(_) => {
+                            close_slot(platform, poller, slot, token);
+                            return;
+                        }
+                    }
+                }
+                ListingPhase::TailPrefix => {
+                    let ok = listing::render_tail_prefix(&mut chunk, slot.listing_entries, false);
+                    slot.listing_phase = ListingPhase::Js;
+                    ok
+                }
+                ListingPhase::Js => {
+                    slot.listing_source = Some(listing::JS);
+                    slot.listing_source_pos = 0;
+                    slot.listing_phase = ListingPhase::TailSuffix;
+                    continue;
+                }
+                ListingPhase::TailSuffix => {
+                    let ok = listing::render_tail_suffix(&mut chunk);
+                    slot.listing_phase = ListingPhase::Final;
+                    ok
+                }
+                ListingPhase::Final => continue,
             }
-        } else {
-            let entries = slot.listing_entries;
-            slot.listing_phase = ListingPhase::Final;
-            listing::render_tail(&mut chunk, entries, false)
         };
         if !rendered || chunk.is_empty() {
-            if slot.listing_phase == ListingPhase::Final {
+            if slot.listing_phase == ListingPhase::Final
+                || slot.listing_phase == ListingPhase::TailSuffix
+            {
                 continue;
             }
             close_slot(platform, poller, slot, token);

@@ -9,9 +9,7 @@ use crate::mime;
 use crate::path::MAX_PATH;
 use crate::platform::{DirEntry, EntryKind};
 
-pub const LISTING_BUF: usize = 64 * 1024;
-
-const CSS: &[u8] = br###"
+pub(crate) const CSS: &[u8] = br###"
 :root { color-scheme: light dark; }
 * { box-sizing: border-box; }
 body {
@@ -113,7 +111,7 @@ pre { background: #ffffff; border: 1px solid #d9dde4; border-radius: 6px; paddin
 }
 "###;
 
-const JS: &[u8] = br###"
+pub(crate) const JS: &[u8] = br###"
 (function () {
   'use strict';
   var body = document.body;
@@ -562,27 +560,29 @@ pub fn encode_path<const N: usize>(url_path: &[u8], out: &mut FixedBuf<N>) -> bo
     url_encode_path(out, url_path)
 }
 
-pub fn render_head<const N: usize>(
-    out: &mut FixedBuf<N>,
-    url_path: &[u8],
-    upload: bool,
-    encoded_path: &[u8],
-) -> bool {
+pub fn render_head_prefix<const N: usize>(out: &mut FixedBuf<N>, url_path: &[u8]) -> bool {
     if !url_path.starts_with(b"/") || !url_path.ends_with(b"/") {
         return false;
     }
     if !out.push(b"<!doctype html>\n<html lang=\"en\">\n<head>\n") {
         return false;
     }
-    if !out.push(b"<meta charset=\"utf-8\">\n")
-        || !out.push(b"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
-        || !out.push(b"<meta name=\"color-scheme\" content=\"light dark\">\n")
-        || !out.push(b"<meta name=\"referrer\" content=\"no-referrer\">\n")
-        || !out.push(b"<title>Index of ")
-        || !escape_html(out, url_path)
-        || !out.push(b"</title>\n<style>")
-        || !out.push(CSS)
-        || !out.push(b"</style>\n<!--[if lt IE 9]><style>#transfer-wrap{display:none}</style><![endif]-->\n</head>\n<body data-path=\"")
+    out.push(b"<meta charset=\"utf-8\">\n")
+        && out.push(b"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+        && out.push(b"<meta name=\"color-scheme\" content=\"light dark\">\n")
+        && out.push(b"<meta name=\"referrer\" content=\"no-referrer\">\n")
+        && out.push(b"<title>Index of ")
+        && escape_html(out, url_path)
+        && out.push(b"</title>\n<style>")
+}
+
+pub fn render_head_suffix<const N: usize>(
+    out: &mut FixedBuf<N>,
+    url_path: &[u8],
+    upload: bool,
+    encoded_path: &[u8],
+) -> bool {
+    if !out.push(b"</style>\n<!--[if lt IE 9]><style>#transfer-wrap{display:none}</style><![endif]-->\n</head>\n<body data-path=\"")
         || !out.push(encoded_path)
         || !out.push(b"\" data-upload=\"")
         || !out.push(if upload { b"1" } else { b"0" })
@@ -610,18 +610,10 @@ pub fn render_head<const N: usize>(
             || !out.push(b"<textarea name=\"text\" rows=\"4\" placeholder=\"Paste or type text\"></textarea>")
             || !out.push(b"<button class=\"btn\" type=\"submit\">Upload text</button></form>\n")
             || !out.push(b"<div id=\"js-tools\" class=\"tools js-only\">")
-            || !out.push(
-                b"<label class=\"btn primary\">Upload<input id=\"file\" type=\"file\" multiple></label>",
-            )
-            || !out.push(
-                b"<label id=\"folder-label\" class=\"btn\">Upload folder<input id=\"folder\" type=\"file\" webkitdirectory multiple></label>",
-            )
-            || !out.push(
-                b"<button id=\"paste-text\" class=\"btn\" type=\"button\" onclick=\"syswebShowText()\">Paste text</button>",
-            )
-            || !out.push(
-                b"<button id=\"mkdir\" class=\"btn\" type=\"button\">New folder</button>",
-            )
+            || !out.push(b"<label class=\"btn primary\">Upload<input id=\"file\" type=\"file\" multiple></label>")
+            || !out.push(b"<label id=\"folder-label\" class=\"btn\">Upload folder<input id=\"folder\" type=\"file\" webkitdirectory multiple></label>")
+            || !out.push(b"<button id=\"paste-text\" class=\"btn\" type=\"button\" onclick=\"syswebShowText()\">Paste text</button>")
+            || !out.push(b"<button id=\"mkdir\" class=\"btn\" type=\"button\">New folder</button>")
             || !out.push(b"<span id=\"status\" role=\"status\" aria-live=\"polite\"></span>")
             || !out.push(b"</div>\n<div id=\"drop\" class=\"js-only\">Drop files or folders here, or paste files/images/text</div>\n")
         {
@@ -643,14 +635,14 @@ pub fn render_head<const N: usize>(
         return false;
     }
 
-    if url_path != b"/" && !render_parent(out, url_path) {
-        return false;
-    }
-
-    true
+    url_path == b"/" || render_parent(out, url_path)
 }
 
-pub fn render_tail<const N: usize>(out: &mut FixedBuf<N>, entries: usize, truncated: bool) -> bool {
+pub fn render_tail_prefix<const N: usize>(
+    out: &mut FixedBuf<N>,
+    entries: usize,
+    truncated: bool,
+) -> bool {
     if entries == 0
         && !out.push(b"<tr class=\"empty\"><td colspan=\"4\">This directory is empty.</td></tr>\n")
     {
@@ -664,27 +656,24 @@ pub fn render_tail<const N: usize>(out: &mut FixedBuf<N>, entries: usize, trunca
         return false;
     }
 
-    if !out.push(b"</tbody></table>\n</main>\n<footer>")
-        || !out.push(b"sysweb ")
-        || !out.push(crate::VERSION.as_bytes())
-        || !out.push(b" &middot; no_std &middot; no alloc &middot; syscalls")
-        || !out.push(b"</footer>\n<div id=\"transfer-wrap\"><details id=\"transfer\"><summary>Terminal transfer</summary><pre>")
-        || !out.push(b"# upload (when --upload is enabled)\ncurl -T FILE URL\n\n")
-        || !out.push(b"# Windows PowerShell (multipart POST; needs --upload)\n$f = \"C:\\filename.bin\"\n$w = New-Object System.Net.WebClient\n$w.UploadFile(\"URL\", $f)\n\n")
-        || !out.push(b"# download\ncurl -O URL</pre></details></div>\n")
-        || !out.push(b"<div id=\"text-dialog\" class=\"js-only\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"text-dialog-title\">")
-        || !out.push(b"<div class=\"dialog-panel\"><h2 id=\"text-dialog-title\">Paste text</h2>")
-        || !out.push(b"<label>File name <input id=\"text-name\" type=\"text\" value=\"pasted.txt\"></label>")
-        || !out.push(b"<textarea id=\"text-body\" rows=\"10\" placeholder=\"Paste or type text\"></textarea>")
-        || !out.push(b"<div class=\"dialog-actions\"><button id=\"text-upload\" class=\"btn primary\" type=\"button\" onclick=\"syswebTextUpload()\">Upload</button>")
-        || !out.push(b"<button id=\"text-cancel\" class=\"btn\" type=\"button\" onclick=\"syswebHideText()\">Cancel</button></div></div></div>\n<script>")
-        || !out.push(JS)
-        || !out.push(b"</script>\n</body>\n</html>\n")
-    {
-        return false;
-    }
+    out.push(b"</tbody></table>\n</main>\n<footer>")
+        && out.push(b"sysweb ")
+        && out.push(crate::VERSION.as_bytes())
+        && out.push(b" &middot; no_std &middot; no alloc &middot; syscalls")
+        && out.push(b"</footer>\n<div id=\"transfer-wrap\"><details id=\"transfer\"><summary>Terminal transfer</summary><pre>")
+        && out.push(b"# upload (when --upload is enabled)\ncurl -T FILE URL\n\n")
+        && out.push(b"# Windows PowerShell (multipart POST; needs --upload)\n$f = \"C:\\filename.bin\"\n$w = New-Object System.Net.WebClient\n$w.UploadFile(\"URL\", $f)\n\n")
+        && out.push(b"# download\ncurl -O URL</pre></details></div>\n")
+        && out.push(b"<div id=\"text-dialog\" class=\"js-only\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"text-dialog-title\">")
+        && out.push(b"<div class=\"dialog-panel\"><h2 id=\"text-dialog-title\">Paste text</h2>")
+        && out.push(b"<label>File name <input id=\"text-name\" type=\"text\" value=\"pasted.txt\"></label>")
+        && out.push(b"<textarea id=\"text-body\" rows=\"10\" placeholder=\"Paste or type text\"></textarea>")
+        && out.push(b"<div class=\"dialog-actions\"><button id=\"text-upload\" class=\"btn primary\" type=\"button\" onclick=\"syswebTextUpload()\">Upload</button>")
+        && out.push(b"<button id=\"text-cancel\" class=\"btn\" type=\"button\" onclick=\"syswebHideText()\">Cancel</button></div></div></div>\n<script>")
+}
 
-    true
+pub fn render_tail_suffix<const N: usize>(out: &mut FixedBuf<N>) -> bool {
+    out.push(b"</script>\n</body>\n</html>\n")
 }
 
 fn render_crumb<const N: usize>(out: &mut FixedBuf<N>, url_path: &[u8]) -> bool {
@@ -1017,7 +1006,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        civil_from_days, format_size, format_time, render_head, render_tail, FixedBuf, LISTING_BUF,
+        civil_from_days, format_size, format_time, render_head_prefix, render_head_suffix,
+        render_tail_prefix, render_tail_suffix, FixedBuf,
     };
 
     #[test]
@@ -1040,12 +1030,23 @@ mod tests {
 
     #[test]
     fn streaming_head_and_tail_fit_a_chunk() {
-        let mut head = FixedBuf::<LISTING_BUF>::new();
-        assert!(render_head(&mut head, b"/", true, b"/"));
-        let mut tail = FixedBuf::<LISTING_BUF>::new();
-        assert!(render_tail(&mut tail, 0, false));
-        assert!(head.len() < 16 * 1024, "head={}", head.len());
-        assert!(tail.len() < 16 * 1024, "tail={}", tail.len());
+        const PIECE: usize = 8 * 1024;
+        let mut head_prefix = FixedBuf::<PIECE>::new();
+        assert!(render_head_prefix(&mut head_prefix, b"/dir/"));
+        let mut head_suffix = FixedBuf::<PIECE>::new();
+        assert!(render_head_suffix(
+            &mut head_suffix,
+            b"/dir/",
+            true,
+            b"/dir/"
+        ));
+        let mut tail_prefix = FixedBuf::<PIECE>::new();
+        assert!(render_tail_prefix(&mut tail_prefix, 0, false));
+        let mut tail_suffix = FixedBuf::<PIECE>::new();
+        assert!(render_tail_suffix(&mut tail_suffix));
+        for piece in [&head_prefix, &head_suffix, &tail_prefix, &tail_suffix] {
+            assert!(piece.len() < PIECE, "piece={}", piece.len());
+        }
     }
 
     #[test]

@@ -391,7 +391,7 @@ bounded multipart `POST` path:
 - `Content-Length` is mandatory for file uploads (411 otherwise); the body is
   streamed until exactly that many bytes have been read, with no fixed cap;
 - bytes already buffered after the header block are written first, then the
-  socket is streamed in 16 KiB chunks;
+  socket is streamed in 8 KiB chunks;
 - `Expect: 100-continue` is answered only when the body is not already
   buffered;
 - the body is written with `write` to a file opened `O_WRONLY|O_CREAT` plus
@@ -416,10 +416,10 @@ multipart parser is only the compatibility path for classic form `POST`s.
 | response header | 4 KiB | one response |
 | redirect `Location` | ~3 KiB | one redirect |
 | directory entries | 4 KiB | one listing |
-| listing chunk | 16 KiB | one streamed fragment |
+| listing chunk | 8 KiB | one streamed fragment |
 | multipart parser | 32 KiB | one form upload |
 | multipart headers | 4 KiB (inside parser buffer) | one part |
-| upload/file chunk | 16 KiB | one PUT/upload read |
+| upload/file chunk | 8 KiB | one PUT/upload read |
 | log line | 1.2 KiB | one log event |
 | config root | 256 B | process |
 
