@@ -528,11 +528,6 @@ pub fn configure_stream(fd: i32) -> Result<()> {
     decode(result).map(|_| ())
 }
 
-pub fn configure_stream_nonblocking(fd: i32) -> Result<()> {
-    configure_stream(fd)?;
-    set_nonblocking(fd)
-}
-
 pub fn set_nonblocking(fd: i32) -> Result<()> {
     let flags = unsafe { syscall6(FCNTL, fd as usize, F_GETFL, 0, 0, 0, 0) };
     let flags = decode(flags)?;
