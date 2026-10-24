@@ -16,10 +16,7 @@ use crate::server::{
     build_header, build_stream_header, resolve_range, root_relative, HEADER_BUF, REQUEST_BUF,
 };
 
-#[cfg(windows)]
-const MAX_CONNECTIONS: usize = 4;
-#[cfg(not(windows))]
-const MAX_CONNECTIONS: usize = 8;
+const MAX_CONNECTIONS: usize = 16;
 const RESPONSE_BUF: usize = HEADER_BUF + 512;
 const EVENT_BATCH: usize = 64;
 const TICK_MS: i32 = 1000;

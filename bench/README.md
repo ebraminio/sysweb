@@ -13,7 +13,7 @@ cache.
 
 Measured on macOS 27.0.1, 10 CPUs, with:
 
-- sysweb: release build, async default, 8 fixed slots, HTTP/1.1 keep-alive,
+- sysweb: release build, async default, 16 fixed slots, HTTP/1.1 keep-alive,
   `TCP_NODELAY`, and `accept4` on Linux
 - nginx: 1.31.8, one worker, `sendfile on`
 - Caddy: 2.11.7, `file-server`, defaults
@@ -80,7 +80,7 @@ and Caddy 3.14 s; throughput was network-bound.
 
 ## Stress run
 
-`bench/stress.sh` drives the server with 64 connections (the server has 8
+`bench/stress.sh` drives the server with 64 connections (the server now has 16
 slots) for 5 seconds, then runs a no-keep-alive `ab` pass and checks that the
 process survives.
 
@@ -88,9 +88,9 @@ One representative macOS run:
 
 | Workload | Throughput | p99 latency |
 | --- | ---: | ---: |
-| 1 KiB, 64 conns | 5,637 req/s | 5.90 ms |
-| 64 KiB, 64 conns | 5,798 req/s | 15.11 ms |
-| 1 KiB, `ab -c8` | 20,055 req/s | — |
+| 1 KiB, 64 conns | 11,025 req/s | 35.80 ms |
+| 64 KiB, 64 conns | 11,190 req/s | 31.05 ms |
+| 1 KiB, `ab -c8` | 20,951 req/s | — |
 
 The 64-connection numbers are queueing/slot-limited, not a capacity claim.
 The point is that the server stays alive and keeps serving under overload.

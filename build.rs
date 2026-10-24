@@ -33,6 +33,7 @@ fn main() {
                     "-Wl,--subsystem,console",
                     "-Wl,--major-subsystem-version,6",
                     "-Wl,--minor-subsystem-version,0",
+                    "-Wl,--stack,8388608",
                 ],
             };
             for arg in args {
