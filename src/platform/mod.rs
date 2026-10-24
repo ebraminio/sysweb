@@ -97,66 +97,13 @@ pub enum Interest {
     Writable,
 }
 
-/// One readiness event returned by `AsyncPlatform::wait`.
+/// One readiness event returned by `Platform::wait`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Event {
     pub token: usize,
     pub readable: bool,
     pub writable: bool,
     pub error: bool,
-}
-
-/// Non-blocking OS services used by the async server.
-///
-/// The base `Platform` trait remains responsible for file/metadata operations.
-/// Socket progress is supplied here by epoll, kqueue, or WSAPoll.
-pub trait AsyncPlatform: Platform {
-    type Poller;
-
-    fn poller(&mut self) -> Result<Self::Poller>;
-    fn register_listener(
-        &mut self,
-        poller: &mut Self::Poller,
-        listener: &Self::Listener,
-        token: usize,
-    ) -> Result<()>;
-    fn register_stream(
-        &mut self,
-        poller: &mut Self::Poller,
-        stream: &Self::Stream,
-        token: usize,
-    ) -> Result<()>;
-    fn set_interest(
-        &mut self,
-        poller: &mut Self::Poller,
-        stream: &Self::Stream,
-        token: usize,
-        interest: Interest,
-    ) -> Result<()>;
-    fn deregister_stream(
-        &mut self,
-        poller: &mut Self::Poller,
-        stream: &Self::Stream,
-        token: usize,
-    ) -> Result<()>;
-    fn wait(
-        &mut self,
-        poller: &mut Self::Poller,
-        events: &mut [Event],
-        timeout_ms: i32,
-    ) -> Result<usize>;
-
-    fn set_listener_nonblocking(&mut self, listener: &Self::Listener) -> Result<()>;
-    fn accept_nonblocking(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
-    fn read_nonblocking(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
-    fn write_nonblocking(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<usize>;
-    fn send_file_nonblocking(
-        &mut self,
-        stream: &mut Self::Stream,
-        file: &mut Self::File,
-        offset: u64,
-        len: u64,
-    ) -> Result<u64>;
 }
 
 /// One local IPv4 interface address for startup logging.
@@ -193,11 +140,55 @@ pub trait Platform {
     type Stream;
     type File;
     type Dir;
+    type Poller;
 
     /// Open the document root once. All later paths are relative to this
     /// directory, and symlink rules apply only beneath it.
     fn set_root(&mut self, root: &[u8]) -> Result<()>;
     fn bind(&mut self, addr: SocketAddr, backlog: u16) -> Result<Self::Listener>;
+    fn poller(&mut self) -> Result<Self::Poller>;
+    fn register_listener(
+        &mut self,
+        poller: &mut Self::Poller,
+        listener: &Self::Listener,
+        token: usize,
+    ) -> Result<()>;
+    fn register_stream(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        token: usize,
+    ) -> Result<()>;
+    fn set_interest(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        token: usize,
+        interest: Interest,
+    ) -> Result<()>;
+    fn deregister_stream(
+        &mut self,
+        poller: &mut Self::Poller,
+        stream: &Self::Stream,
+        token: usize,
+    ) -> Result<()>;
+    fn wait(
+        &mut self,
+        poller: &mut Self::Poller,
+        events: &mut [Event],
+        timeout_ms: i32,
+    ) -> Result<usize>;
+    fn set_listener_nonblocking(&mut self, listener: &Self::Listener) -> Result<()>;
+    fn accept_nonblocking(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
+    fn read_nonblocking(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
+    fn write_nonblocking(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<usize>;
+    fn send_file_nonblocking(
+        &mut self,
+        stream: &mut Self::Stream,
+        file: &mut Self::File,
+        offset: u64,
+        len: u64,
+    ) -> Result<u64>;
     /// Fill `out` with up-facing IPv4 interface addresses. Returns the count.
     fn interfaces(&mut self, out: &mut [Interface]) -> usize;
     /// Open `path` (relative to the document root) read-only.

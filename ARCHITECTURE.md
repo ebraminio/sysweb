@@ -485,8 +485,8 @@ readiness, non-blocking accept/read/write/sendfile, and a fixed-slot
 GET/HEAD/PUT/POST state machine. Metadata and listings remain synchronous.
 A 1-second poll tick drives the per-slot idle deadline (about 30 seconds).
 
-The `Platform` trait is deliberately shaped so the async version is an
-extension, not a rewrite. The async backend will not use Rust `async`/`await`:
+The `Platform` trait is one merged seam for readiness, sockets, and files. It
+does not use Rust `async`/`await`:
 a futures executor and its state machines tend to want allocation and add a lot
 of machinery for a static file server. A hand-written state machine over
 readiness events is smaller and fully no-alloc.

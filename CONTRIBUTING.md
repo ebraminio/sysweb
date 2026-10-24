@@ -132,7 +132,7 @@ src/listing.rs       compiled-in HTML/CSS/JS directory page
 src/multipart.rs     streaming multipart parser
 src/mime.rs          static extension table
 src/config.rs        no-alloc command-line parser
-src/platform/        Platform and AsyncPlatform traits; OS backends
+src/platform/        merged Platform trait; OS backends
 tests/e2e.rs         real-process HTTP tests
 tests/ports.rs       port selection tests
 tests/security.rs    adversarial black-box tests (Unix)

@@ -37,13 +37,13 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Tests (debug)
-        run: cargo test
+        run: cargo test -- --test-threads=1
 
       # Release builds are not optional: this catches LLVM libcall
       # canonicalization bugs (see the bzero/LTO story in ARCHITECTURE.md)
       # that do not reproduce in debug builds.
       - name: Tests (release + LTO)
-        run: cargo test --release
+        run: cargo test --release -- --test-threads=1
 
       - name: Build release binary
         run: cargo build --release

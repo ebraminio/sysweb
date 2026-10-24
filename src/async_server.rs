@@ -11,7 +11,7 @@ use crate::listing;
 use crate::mime;
 use crate::multipart::{self, Sink, SinkError};
 use crate::path::{self, MAX_PATH, MAX_URL_PATH};
-use crate::platform::{AsyncPlatform, Error, Event, Interest};
+use crate::platform::{Error, Event, Interest, Platform};
 use crate::server::{
     build_header, build_stream_header, resolve_range, root_relative, HEADER_BUF, REQUEST_BUF,
 };
@@ -51,20 +51,20 @@ enum ListingPhase {
 }
 
 #[allow(clippy::large_enum_variant)]
-enum Upload<P: AsyncPlatform> {
+enum Upload<P: Platform> {
     Put(PutUpload<P>),
     Post(PostUpload<P>),
     Discard { remaining: u64 },
 }
 
-struct PutUpload<P: AsyncPlatform> {
+struct PutUpload<P: Platform> {
     file: P::File,
     path: [u8; MAX_PATH],
     path_len: usize,
     remaining: u64,
 }
 
-struct PostUpload<P: AsyncPlatform> {
+struct PostUpload<P: Platform> {
     parser: multipart::Parser,
     target: [u8; MAX_PATH],
     target_len: usize,
@@ -77,7 +77,7 @@ struct PostUpload<P: AsyncPlatform> {
     remaining: u64,
 }
 
-struct PostSink<'a, P: AsyncPlatform> {
+struct PostSink<'a, P: Platform> {
     platform: &'a mut P,
     target: &'a [u8],
     target_is_dir: bool,
@@ -88,7 +88,7 @@ struct PostSink<'a, P: AsyncPlatform> {
     files: &'a mut usize,
 }
 
-impl<P: AsyncPlatform> Sink for PostSink<'_, P> {
+impl<P: Platform> Sink for PostSink<'_, P> {
     fn begin_file(&mut self, filename: &[u8]) -> core::result::Result<(), SinkError> {
         if *self.files > 0 {
             return Err(SinkError::TooManyFiles);
@@ -151,7 +151,7 @@ impl<P: AsyncPlatform> Sink for PostSink<'_, P> {
     }
 }
 
-struct Slot<P: AsyncPlatform> {
+struct Slot<P: Platform> {
     stream: Option<P::Stream>,
     file: Option<P::File>,
     state: State,
@@ -193,7 +193,7 @@ struct Slot<P: AsyncPlatform> {
     form_redirect: bool,
 }
 
-impl<P: AsyncPlatform> Slot<P> {
+impl<P: Platform> Slot<P> {
     fn new() -> Self {
         Self {
             stream: None,
@@ -370,7 +370,7 @@ impl<P: AsyncPlatform> Slot<P> {
     }
 }
 
-pub fn run<P: AsyncPlatform>(mut platform: P, config: Config) -> ! {
+pub fn run<P: Platform>(mut platform: P, config: Config) -> ! {
     if platform.set_root(config.root()).is_err() {
         platform.log(b"syswebd: root open failed\n");
         platform.exit(1)
@@ -481,7 +481,7 @@ pub fn run<P: AsyncPlatform>(mut platform: P, config: Config) -> ! {
     }
 }
 
-fn accept_ready<P: AsyncPlatform>(
+fn accept_ready<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     listener: &P::Listener,
@@ -516,7 +516,7 @@ fn accept_ready<P: AsyncPlatform>(
     }
 }
 
-fn handle_event<P: AsyncPlatform>(
+fn handle_event<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     config: &Config,
@@ -548,7 +548,7 @@ fn handle_event<P: AsyncPlatform>(
     }
 }
 
-fn read_slot<P: AsyncPlatform>(
+fn read_slot<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     config: &Config,
@@ -589,7 +589,7 @@ fn read_slot<P: AsyncPlatform>(
     }
 }
 
-fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &mut Slot<P>) {
+fn prepare_request<P: Platform>(platform: &mut P, config: &Config, slot: &mut Slot<P>) {
     let request = match http::parse(&slot.request[..slot.request_len]) {
         Ok(request) => request,
         Err(http::ParseError::UnsupportedMethod) => {
@@ -816,7 +816,7 @@ fn prepare_request<P: AsyncPlatform>(platform: &mut P, config: &Config, slot: &m
     }
 }
 
-fn prepare_text_form<P: AsyncPlatform>(
+fn prepare_text_form<P: Platform>(
     platform: &mut P,
     config: &Config,
     slot: &mut Slot<P>,
@@ -885,7 +885,7 @@ fn prepare_text_form<P: AsyncPlatform>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare_put<P: AsyncPlatform>(
+fn prepare_put<P: Platform>(
     platform: &mut P,
     config: &Config,
     slot: &mut Slot<P>,
@@ -994,7 +994,7 @@ fn prepare_put<P: AsyncPlatform>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare_post<P: AsyncPlatform>(
+fn prepare_post<P: Platform>(
     platform: &mut P,
     config: &Config,
     slot: &mut Slot<P>,
@@ -1082,7 +1082,7 @@ fn prepare_post<P: AsyncPlatform>(
     }
 }
 
-fn feed_post<P: AsyncPlatform>(
+fn feed_post<P: Platform>(
     platform: &mut P,
     post: &mut PostUpload<P>,
     data: &[u8],
@@ -1100,7 +1100,7 @@ fn feed_post<P: AsyncPlatform>(
     post.parser.feed(data, &mut sink)
 }
 
-fn finish_post<P: AsyncPlatform>(
+fn finish_post<P: Platform>(
     platform: &mut P,
     post: &mut PostUpload<P>,
 ) -> core::result::Result<(), multipart::ParseError> {
@@ -1117,7 +1117,7 @@ fn finish_post<P: AsyncPlatform>(
     post.parser.finish(&mut sink)
 }
 
-fn abort_post<P: AsyncPlatform>(platform: &mut P, post: &mut PostUpload<P>) {
+fn abort_post<P: Platform>(platform: &mut P, post: &mut PostUpload<P>) {
     post.file = None;
     if post.path_len > 0 {
         let _ = platform.remove_file(&post.path[..post.path_len]);
@@ -1137,7 +1137,7 @@ fn multipart_status(error: multipart::ParseError) -> Status {
     }
 }
 
-fn prepare_upload_response<P: AsyncPlatform>(slot: &mut Slot<P>, body: &[u8]) {
+fn prepare_upload_response<P: Platform>(slot: &mut Slot<P>, body: &[u8]) {
     if slot.form_redirect {
         let mut location = [0u8; MAX_URL_PATH];
         let len = slot.log_path_len.min(location.len());
@@ -1168,7 +1168,7 @@ fn prepare_upload_response<P: AsyncPlatform>(slot: &mut Slot<P>, body: &[u8]) {
     slot.log_len = body.len() as u64;
 }
 
-fn finish_upload<P: AsyncPlatform>(platform: &mut P, slot: &mut Slot<P>) {
+fn finish_upload<P: Platform>(platform: &mut P, slot: &mut Slot<P>) {
     let Some(upload) = slot.upload.take() else {
         return;
     };
@@ -1192,7 +1192,7 @@ fn finish_upload<P: AsyncPlatform>(platform: &mut P, slot: &mut Slot<P>) {
     prepare_upload_response(slot, body);
 }
 
-fn read_body_slot<P: AsyncPlatform>(
+fn read_body_slot<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     slot: &mut Slot<P>,
@@ -1270,7 +1270,7 @@ fn read_body_slot<P: AsyncPlatform>(
     }
 }
 
-fn abort_upload<P: AsyncPlatform>(platform: &mut P, slot: &mut Slot<P>) {
+fn abort_upload<P: Platform>(platform: &mut P, slot: &mut Slot<P>) {
     if let Some(upload) = slot.upload.take() {
         match upload {
             Upload::Put(upload) => {
@@ -1286,7 +1286,7 @@ fn abort_upload<P: AsyncPlatform>(platform: &mut P, slot: &mut Slot<P>) {
     }
 }
 
-fn write_continue_slot<P: AsyncPlatform>(
+fn write_continue_slot<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     slot: &mut Slot<P>,
@@ -1321,7 +1321,7 @@ fn write_continue_slot<P: AsyncPlatform>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn serve_listing<P: AsyncPlatform>(
+fn serve_listing<P: Platform>(
     platform: &mut P,
     slot: &mut Slot<P>,
     url_path: &[u8],
@@ -1427,7 +1427,7 @@ fn chunk_prefix(len: usize, out: &mut [u8; 32]) -> usize {
     at + 2
 }
 
-fn prepare_file<P: AsyncPlatform>(
+fn prepare_file<P: Platform>(
     slot: &mut Slot<P>,
     file: P::File,
     mime_path: &[u8],
@@ -1495,7 +1495,7 @@ fn prepare_file<P: AsyncPlatform>(
     slot.log_len = length;
 }
 
-fn listing_slot<P: AsyncPlatform>(
+fn listing_slot<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     config: &Config,
@@ -1653,7 +1653,7 @@ fn listing_slot<P: AsyncPlatform>(
     }
 }
 
-fn write_slot<P: AsyncPlatform>(
+fn write_slot<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     config: &Config,
@@ -1702,7 +1702,7 @@ fn write_slot<P: AsyncPlatform>(
     }
 }
 
-fn send_file_slot<P: AsyncPlatform>(
+fn send_file_slot<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     config: &Config,
@@ -1744,7 +1744,7 @@ fn send_file_slot<P: AsyncPlatform>(
     }
 }
 
-fn drain_slot<P: AsyncPlatform>(
+fn drain_slot<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     slot: &mut Slot<P>,
@@ -1776,7 +1776,7 @@ fn drain_slot<P: AsyncPlatform>(
     }
 }
 
-fn finish_response<P: AsyncPlatform>(
+fn finish_response<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     config: &Config,
@@ -1830,7 +1830,7 @@ fn finish_response<P: AsyncPlatform>(
     }
 }
 
-fn log_slot<P: AsyncPlatform>(platform: &mut P, slot: &Slot<P>) {
+fn log_slot<P: Platform>(platform: &mut P, slot: &Slot<P>) {
     if slot.quiet || slot.log_path_len == 0 {
         return;
     }
@@ -1846,7 +1846,7 @@ fn log_slot<P: AsyncPlatform>(platform: &mut P, slot: &Slot<P>) {
     platform.log(line.as_slice());
 }
 
-fn transition<P: AsyncPlatform>(
+fn transition<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     slot: &mut Slot<P>,
@@ -1879,7 +1879,7 @@ fn transition<P: AsyncPlatform>(
     }
 }
 
-fn close_slot<P: AsyncPlatform>(
+fn close_slot<P: Platform>(
     platform: &mut P,
     poller: &mut P::Poller,
     slot: &mut Slot<P>,

@@ -26,8 +26,7 @@ compile_error!(
 );
 
 use super::{
-    AsyncPlatform, DirEntry, EntryKind, Error, Event, FileInfo, Interest, Interface, Platform,
-    Result, SocketAddr,
+    DirEntry, EntryKind, Error, Event, FileInfo, Interest, Interface, Platform, Result, SocketAddr,
 };
 
 const DIR_BUFFER: usize = 4096;
@@ -357,9 +356,7 @@ impl Platform for Sys {
     fn exit(&mut self, code: i32) -> ! {
         abi::exit(code)
     }
-}
 
-impl AsyncPlatform for Sys {
     type Poller = Poller;
 
     fn poller(&mut self) -> Result<Self::Poller> {

@@ -3,8 +3,7 @@
 #![allow(non_snake_case)]
 
 use crate::platform::{
-    AsyncPlatform, DirEntry, EntryKind, Error, Event, FileInfo, Interest, Interface, Platform,
-    Result, SocketAddr,
+    DirEntry, EntryKind, Error, Event, FileInfo, Interest, Interface, Platform, Result, SocketAddr,
 };
 use core::ffi::c_void;
 use core::ptr::null_mut;
@@ -819,14 +818,7 @@ impl Platform for Sys {
     fn exit(&mut self, code: i32) -> ! {
         unsafe { ExitProcess(code as u32) }
     }
-}
 
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetStdHandle(which: u32) -> *mut c_void;
-}
-
-impl AsyncPlatform for Sys {
     type Poller = Poller;
 
     fn poller(&mut self) -> Result<Self::Poller> {
