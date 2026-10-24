@@ -469,7 +469,7 @@ fn serves_static_files_and_directory_indexes() {
         let response = get(port, "/assets/leak");
         let (head, _) = split(&response);
         assert_status(&head, "HTTP/1.1 403 Forbidden");
-        assert!(text(&decode_chunked(&split(&get(port, "/assets/")).1))
+        assert!(text(&decode_chunked(split(&get(port, "/assets/")).1))
             .contains("symlinks are not served"));
 
         // A symlinked directory must not be traversed, even for a real file
@@ -574,7 +574,7 @@ fn uploads_create_files_and_directories() {
     let (head, body) = split(&response);
     assert_status(&head, "HTTP/1.1 200 OK");
     assert_eq!(body, b"nested");
-    assert!(text(&decode_chunked(&split(&get(port, "/assets/")).1)).contains("data-upload=\"1\""));
+    assert!(text(&decode_chunked(split(&get(port, "/assets/")).1)).contains("data-upload=\"1\""));
 
     let response = put(port, "/assets/nested/", b"");
     assert_status(&split(&response).0, "HTTP/1.1 409 Conflict");
@@ -657,7 +657,7 @@ fn multipart_forms_work_for_old_browsers() {
 
     // The page contains a classic multipart form and the inline JS stays in
     // the ES3/feature-detected subset so old browsers do not fail parsing.
-    let page = text(&decode_chunked(&split(&get(port, "/assets/")).1));
+    let page = text(&decode_chunked(split(&get(port, "/assets/")).1));
     assert!(page.contains("enctype=\"multipart/form-data\""));
     assert!(page.contains("id=\"classic-upload\""));
     assert!(!page.contains("Promise"));
