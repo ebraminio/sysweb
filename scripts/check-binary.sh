@@ -30,7 +30,7 @@ Darwin)
 
     # The libSystem ABI is the stable macOS interface. Allowlist exactly the
     # functions this backend calls (plus dyld's stub binder).
-    allowed=" __error _exit accept bind close closedir fcntl fdopendir freeifaddrs fstat getifaddrs fstatat kevent kqueue listen mkdirat nanosleep openat read readdir send sendfile setsockopt socket unlinkat write dyld_stub_binder "
+    allowed=" __error _exit accept bind close closedir fcntl fdopendir freeifaddrs fstat getifaddrs getpeername fstatat kevent kqueue listen mkdirat nanosleep openat read readdir send sendfile setsockopt socket unlinkat write dyld_stub_binder "
     imports="$(nm -u "$binary" 2>/dev/null || true)"
     [ -n "$imports" ] || fail "no libSystem imports found (unexpected)"
     for symbol in $imports; do
