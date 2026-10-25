@@ -13,3 +13,4 @@
 /bench/.work
 /spikes/download-c10k/target
 /spikes/io-uring/server
+/spikes/chat/target
