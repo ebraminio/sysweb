@@ -31,13 +31,13 @@ POST /chat      text=...; append; 303 Location: /
 ```
 
 No history is promised. The server keeps a fixed ring of **16 messages × 400
-bytes** and clears it on restart.
+bytes**, plus the peer IP address, and clears it on restart.
 
 The page has no JavaScript:
 
 ```html
 <form method="post" action="/chat">
-  <input name="text" maxlength="400">
+  <textarea name="text" rows="4" maxlength="400"></textarea>
   <button>Send</button>
 </form>
 <iframe src="/messages"></iframe>
@@ -67,11 +67,11 @@ use the existing reactor and the same short polling responses.
 
 - a `--chat` mode with routes `/`, `/messages`, `/chat`;
 - shared `Chat` state in `run`, not per-slot;
-- a URL-encoded form body parser;
+- a URL-encoded form body parser and multiline text preservation;
 - a `ReadingChatBody` state for split POST bodies;
 - streamed or size-capped page rendering, because 16 messages can exceed the
   4.6 KiB response buffer if the text limit is raised;
-- HTML escaping and a message-length cap;
+- HTML escaping, a message-length cap, and the peer IP;
 - no persistence and no WebSocket;
 - Basic auth via `--userpass` if desired.
 
@@ -88,3 +88,13 @@ curl http://127.0.0.1:19550/messages
 ```
 
 The escaped message appears as `hello &lt;world&gt;`.
+
+Multiline input is preserved as `<br>` in the message iframe. The source IP is
+recorded from `peer_addr()` and shown before the text:
+
+```html
+<span class="from">192.168.1.5</span>line one<br>line two
+```
+
+The address is the TCP peer, not an authenticated identity. Behind a reverse
+proxy this would need `X-Forwarded-For` handling, which the spike does not do.

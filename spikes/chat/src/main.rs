@@ -18,6 +18,8 @@ const MAX_TEXT: usize = 400;
 
 #[derive(Clone, Copy)]
 struct Message {
+    from: [u8; 64],
+    from_len: usize,
     text: [u8; MAX_TEXT],
     len: usize,
 }
@@ -32,6 +34,8 @@ impl Chat {
     fn new() -> Self {
         Self {
             messages: [Message {
+                from: [0; 64],
+                from_len: 0,
                 text: [0; MAX_TEXT],
                 len: 0,
             }; MAX_MESSAGES],
@@ -40,12 +44,16 @@ impl Chat {
         }
     }
 
-    fn push(&mut self, text: &[u8]) {
+    fn push(&mut self, from: &[u8], text: &[u8]) {
+        let from_len = from.len().min(64);
         let len = text.len().min(MAX_TEXT);
         let mut message = Message {
+            from: [0; 64],
+            from_len,
             text: [0; MAX_TEXT],
             len,
         };
+        message.from[..from_len].copy_from_slice(&from[..from_len]);
         message.text[..len].copy_from_slice(&text[..len]);
         self.messages[self.head] = message;
         self.head = (self.head + 1) % MAX_MESSAGES;
@@ -61,7 +69,9 @@ impl Chat {
         out.push_str("<title>chat</title><style>");
         out.push_str(
             "body{font:14px monospace;margin:0;padding:8px;background:#f5f6f8;color:#16181d}\
-             .line{margin:0 0 6px}.empty{color:#777}",
+             .line{margin:0 0 10px;white-space:pre-wrap;overflow-wrap:anywhere}\
+             .from{color:#4a5568;font-weight:bold;margin-right:8px}\
+             .empty{color:#777}",
         );
         out.push_str("</style>");
         if self.count == 0 {
@@ -70,7 +80,9 @@ impl Chat {
             let start = (self.head + MAX_MESSAGES - self.count) % MAX_MESSAGES;
             for i in 0..self.count {
                 let message = &self.messages[(start + i) % MAX_MESSAGES];
-                out.push_str("<p class=\"line\">");
+                out.push_str("<p class=\"line\"><span class=\"from\">");
+                escape_html(&mut out, &message.from[..message.from_len]);
+                out.push_str("</span>");
                 escape_html(&mut out, &message.text[..message.len]);
                 out.push_str("</p>");
             }
@@ -160,6 +172,10 @@ fn handle(mut stream: TcpStream, chat: &Mutex<Chat>) -> std::io::Result<()> {
         None => return respond(&mut stream, 400, "text/plain", b"bad request\n"),
     };
     let body = &request[header_end..header_end + length];
+    let from = match stream.peer_addr() {
+        Ok(addr) => addr.ip().to_string(),
+        Err(_) => String::from("unknown"),
+    };
 
     match (method, target) {
         (b"GET", b"/") => {
@@ -185,7 +201,7 @@ fn handle(mut stream: TcpStream, chat: &Mutex<Chat>) -> std::io::Result<()> {
                 Some(text) if !text.is_empty() => text,
                 _ => return redirect(&mut stream, "/"),
             };
-            chat.lock().unwrap().push(&text);
+            chat.lock().unwrap().push(from.as_bytes(), &text);
             redirect(&mut stream, "/")
         }
         _ => respond(&mut stream, 404, "text/plain", b"not found\n"),
@@ -199,12 +215,12 @@ fn form_page() -> String {
     out.push_str("<title>chat</title><style>");
     out.push_str(
         "body{font:15px monospace;margin:0;padding:12px;background:#f5f6f8;color:#16181d}\
-         form{display:flex;gap:8px;margin:0 0 12px}input{flex:1;padding:8px;font:inherit}\
-         button{padding:8px 12px;font:inherit}iframe{width:100%;height:65vh;border:1px solid #ccc;background:#fff}",
+         form{margin:0 0 12px}textarea{width:100%;box-sizing:border-box;padding:8px;font:inherit}\
+         button{margin-top:8px;padding:8px 12px;font:inherit}iframe{width:100%;height:65vh;border:1px solid #ccc;background:#fff}",
     );
     out.push_str("</style>");
     out.push_str("<form method=\"post\" action=\"/chat\">");
-    out.push_str("<input name=\"text\" maxlength=\"400\" autofocus autocomplete=\"off\">");
+    out.push_str("<textarea name=\"text\" rows=\"4\" maxlength=\"400\" autofocus autocomplete=\"off\"></textarea>");
     out.push_str("<button type=\"submit\">Send</button></form>");
     out.push_str("<iframe src=\"/messages\" title=\"messages\"></iframe>");
     out
