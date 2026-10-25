@@ -18,6 +18,7 @@ const MAX_TEXT: usize = 400;
 
 #[derive(Clone, Copy)]
 struct Message {
+    seq: u64,
     from: [u8; 64],
     from_len: usize,
     text: [u8; MAX_TEXT],
@@ -28,12 +29,14 @@ struct Chat {
     messages: [Message; MAX_MESSAGES],
     head: usize,
     count: usize,
+    next_seq: u64,
 }
 
 impl Chat {
     fn new() -> Self {
         Self {
             messages: [Message {
+                seq: 0,
                 from: [0; 64],
                 from_len: 0,
                 text: [0; MAX_TEXT],
@@ -41,13 +44,16 @@ impl Chat {
             }; MAX_MESSAGES],
             head: 0,
             count: 0,
+            next_seq: 0,
         }
     }
 
     fn push(&mut self, from: &[u8], text: &[u8]) {
         let from_len = from.len().min(64);
         let len = text.len().min(MAX_TEXT);
+        self.next_seq += 1;
         let mut message = Message {
+            seq: self.next_seq,
             from: [0; 64],
             from_len,
             text: [0; MAX_TEXT],
@@ -62,30 +68,75 @@ impl Chat {
         }
     }
 
-    fn render(&self) -> String {
+    fn render(&self, paused: bool) -> String {
         let mut out = String::new();
         out.push_str("<!doctype html><meta charset=\"utf-8\">");
-        out.push_str("<meta http-equiv=\"refresh\" content=\"1\">");
+        if !paused {
+            out.push_str("<meta http-equiv=\"refresh\" content=\"1\">");
+            out.push_str("<script>");
+            out.push_str("if(window.fetch&&window.Promise){");
+            out.push_str("var m=document.querySelector('meta[http-equiv=\"refresh\"]');");
+            out.push_str("if(m&&m.parentNode)m.parentNode.removeChild(m);}");
+            out.push_str("</script>");
+        }
         out.push_str("<title>chat</title><style>");
         out.push_str(
             "body{font:14px monospace;margin:0;padding:8px;background:#f5f6f8;color:#16181d}\
-             .line{margin:0 0 12px}\
+             .bar{margin:0 0 10px}.line{margin:0 0 12px}\
              .from{color:#4a5568;font-weight:bold;margin-bottom:2px}\
              .text{padding-left:1em;white-space:pre-wrap;overflow-wrap:anywhere}\
-             .empty{color:#777}",
+             .empty{color:#777}a{color:#0645ad}",
         );
-        out.push_str("</style>");
+        out.push_str("</style><div class=\"bar\">");
+        if paused {
+            out.push_str("<a href=\"/messages\">Resume live updates</a>");
+        } else {
+            out.push_str("<a href=\"/messages?pause=1\">Pause to copy</a>");
+        }
+        out.push_str("</div><div id=\"messages\" data-since=\"");
+        out.push_str(&self.next_seq.to_string());
+        out.push_str("\">");
         if self.count == 0 {
             out.push_str("<p class=\"empty\">No messages yet.</p>");
         } else {
             let newest = (self.head + MAX_MESSAGES - 1) % MAX_MESSAGES;
             for i in 0..self.count {
                 let message = &self.messages[(newest + MAX_MESSAGES - i) % MAX_MESSAGES];
-                out.push_str("<div class=\"line\"><div class=\"from\">");
-                escape_html(&mut out, &message.from[..message.from_len]);
-                out.push_str("</div><div class=\"text\">");
-                escape_html(&mut out, &message.text[..message.len]);
-                out.push_str("</div></div>");
+                render_message(&mut out, message);
+            }
+        }
+        out.push_str("</div>");
+        if !paused {
+            out.push_str("<script>(function(){");
+            out.push_str("if(!window.fetch||!window.Promise)return;");
+            out.push_str("var box=document.getElementById('messages');if(!box)return;");
+            out.push_str("var since=Number(box.getAttribute('data-since'))||0;");
+            out.push_str("function tick(){");
+            out.push_str("if(window.getSelection&&String(window.getSelection()))return;");
+            out.push_str("fetch('/messages?since='+since,{cache:'no-store'}).then(function(r){");
+            out.push_str("var latest=r.headers.get('X-Since');");
+            out.push_str("return r.text().then(function(html){return [latest,html];});");
+            out.push_str("}).then(function(pair){var latest=pair[0],html=pair[1];");
+            out.push_str("if(latest)since=Number(latest);");
+            out.push_str(
+                "if(html){if(box.insertAdjacentHTML)box.insertAdjacentHTML('afterbegin',html);",
+            );
+            out.push_str("else box.innerHTML=html+box.innerHTML;}}).catch(function(){});}");
+            out.push_str("setInterval(tick,1000);})();</script>");
+        }
+        out
+    }
+
+    fn render_fragment(&self, since: u64) -> String {
+        let mut out = String::new();
+        if self.count == 0 {
+            return out;
+        }
+        let newest = (self.head + MAX_MESSAGES - 1) % MAX_MESSAGES;
+        for i in 0..self.count {
+            let message = &self.messages[(newest + MAX_MESSAGES - i) % MAX_MESSAGES];
+            if message.seq > since {
+                render_message(&mut out, message);
             }
         }
         out
@@ -177,8 +228,9 @@ fn handle(mut stream: TcpStream, chat: &Mutex<Chat>) -> std::io::Result<()> {
         Ok(addr) => addr.ip().to_string(),
         Err(_) => String::from("unknown"),
     };
+    let (path, query) = split_query(target);
 
-    match (method, target) {
+    match (method, path) {
         (b"GET", b"/") => {
             let page = form_page();
             respond(
@@ -189,13 +241,28 @@ fn handle(mut stream: TcpStream, chat: &Mutex<Chat>) -> std::io::Result<()> {
             )
         }
         (b"GET", b"/messages") => {
-            let page = chat.lock().unwrap().render();
-            respond(
-                &mut stream,
-                200,
-                "text/html; charset=utf-8",
-                page.as_bytes(),
-            )
+            let paused = query_value(query, b"pause") == Some(b"1");
+            if let Some(since) = query_value(query, b"since").and_then(parse_u64) {
+                let (page, latest) = {
+                    let chat = chat.lock().unwrap();
+                    (chat.render_fragment(since), chat.next_seq)
+                };
+                respond_since(
+                    &mut stream,
+                    200,
+                    "text/html; charset=utf-8",
+                    page.as_bytes(),
+                    latest,
+                )
+            } else {
+                let page = chat.lock().unwrap().render(paused);
+                respond(
+                    &mut stream,
+                    200,
+                    "text/html; charset=utf-8",
+                    page.as_bytes(),
+                )
+            }
         }
         (b"POST", b"/chat") => {
             let text = match form_text(body) {
@@ -229,6 +296,53 @@ fn form_page() -> String {
     out.push_str("t.addEventListener('keydown',function(e){if(e.isComposing)return;");
     out.push_str("if(e.key==='Enter'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();f.submit();}});})();</script>");
     out
+}
+
+fn render_message(out: &mut String, message: &Message) {
+    out.push_str("<div class=\"line\" data-seq=\"");
+    out.push_str(&message.seq.to_string());
+    out.push_str("\"><div class=\"from\">");
+    escape_html(out, &message.from[..message.from_len]);
+    out.push_str("</div><div class=\"text\">");
+    escape_html(out, &message.text[..message.len]);
+    out.push_str("</div></div>");
+}
+
+fn split_query(target: &[u8]) -> (&[u8], &[u8]) {
+    match target.iter().position(|byte| *byte == b'?') {
+        Some(at) => (&target[..at], &target[at + 1..]),
+        None => (target, b""),
+    }
+}
+
+fn query_value<'a>(query: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
+    for field in query.split(|byte| *byte == b'&') {
+        let mut parts = field.splitn(2, |byte| *byte == b'=');
+        if parts.next()? == key {
+            return parts.next();
+        }
+    }
+    None
+}
+
+fn parse_u64(bytes: &[u8]) -> Option<u64> {
+    std::str::from_utf8(bytes).ok()?.parse().ok()
+}
+
+fn respond_since(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+    latest: u64,
+) -> std::io::Result<()> {
+    let header = format!(
+        "HTTP/1.1 {status} OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Since: {latest}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(header.as_bytes())?;
+    stream.write_all(body)?;
+    stream.flush()
 }
 
 fn respond(

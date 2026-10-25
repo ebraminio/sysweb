@@ -1,13 +1,14 @@
 # Old-browser chat spike
 
-A small local-network chat experiment with **no WebSocket and no JavaScript**.
+A small local-network chat experiment with **no WebSocket**. The baseline works
+without JavaScript; modern browsers get incremental polling instead of page
+reloads.
 
-The form lives in the page. The message list lives in an iframe whose page uses
-`<meta http-equiv="refresh">`. A message POST is answered with `303 See Other`,
-so refreshing the form never resubmits it.
+The form lives in the page. The message list lives in an iframe. A message POST
+is answered with `303 See Other`, so refreshing the form never resubmits it.
 
 This is a protocol/UI prototype, not production code. It uses std threads and a
-heap mutex; the sysweb version would keep the ring in `run` and use fixed slots.
+heap mutex; a sysweb version would keep the ring in `run` and use fixed slots.
 
 ## Run
 
@@ -25,15 +26,17 @@ http://127.0.0.1:19550/
 ## Protocol
 
 ```text
-GET /           form + iframe
-GET /messages   last messages; meta refresh every second
-POST /chat      text=...; append; 303 Location: /
+GET /                     form + iframe
+GET /messages             full message page
+GET /messages?pause=1     no auto-refresh; copy-friendly
+GET /messages?since=N     HTML fragment for N+1..; X-Since header
+POST /chat                text=...; prepend; 303 Location: /
 ```
 
 No history is promised. The server keeps a fixed ring of **16 messages × 400
 bytes**, plus the peer IP address, and clears it on restart.
 
-The page has no JavaScript:
+## The page
 
 ```html
 <form method="post" action="/chat">
@@ -43,15 +46,37 @@ The page has no JavaScript:
 <iframe src="/messages"></iframe>
 ```
 
-`/messages` contains:
+The form and the message list are separate, so a message update does not erase
+half-typed input.
+
+Messages are newest-first. The sender address is on its own line and the text
+is indented beneath it:
 
 ```html
-<meta http-equiv="refresh" content="1">
+<div class="line">
+  <div class="from">127.0.0.1</div>
+  <div class="text">line one<br>line two</div>
+</div>
 ```
 
-The form and the message list are separate, so the refresh does not erase
-half-typed input. This works in browsers older than `fetch`, WebSocket, or
-`XMLHttpRequest`.
+When JavaScript is available, **Enter** submits and **Ctrl+Enter** inserts a
+newline. Without JavaScript, the textarea keeps its normal Enter behavior and
+the Send button submits.
+
+## Copying text
+
+`<meta http-equiv="refresh">` replaces the document and therefore destroys the
+browser selection. This spike handles that in two ways:
+
+- `/messages?pause=1` omits the refresh and shows a “Resume live updates” link;
+- modern browsers run a small polling script and remove the meta refresh.
+
+The polling script fetches `/messages?since=N`, inserts only new messages at
+the top, and **skips the update while there is a text selection**. Previously
+rendered messages are not replaced, so a selection can survive new messages
+arriving.
+
+Without JavaScript, pause first, then copy.
 
 ## Why polling, not long-poll
 
@@ -72,12 +97,13 @@ use the existing reactor and the same short polling responses.
 - streamed or size-capped page rendering, because 16 messages can exceed the
   4.6 KiB response buffer if the text limit is raised;
 - HTML escaping, a message-length cap, and the peer IP;
+- sequence numbers for the `since` fragment;
 - no persistence and no WebSocket;
 - newest-first rendering, sender on its own line, and indented text;
 - Basic auth via `--userpass` if desired.
 
 The interesting part is that the old-browser UX is entirely HTTP: a form, a
-303, an iframe, and a meta refresh.
+303, an iframe, a meta refresh, and a pause link.
 
 ## Try it
 
@@ -86,16 +112,11 @@ curl http://127.0.0.1:19550/
 curl http://127.0.0.1:19550/messages
 curl -i -X POST --data 'text=hello%20%3Cworld%3E' http://127.0.0.1:19550/chat
 curl http://127.0.0.1:19550/messages
+curl -i 'http://127.0.0.1:19550/messages?since=1'
 ```
 
-The escaped message appears as `hello &lt;world&gt;`.
-
-Multiline input is preserved as `<br>` in the message iframe. The source IP is
-recorded from `peer_addr()` and shown before the text:
-
-```html
-<span class="from">192.168.1.5</span>line one<br>line two
-```
+The escaped message appears as `hello &lt;world&gt;`. The fragment response
+includes `X-Since`, the latest sequence number.
 
 The address is the TCP peer, not an authenticated identity. Behind a reverse
 proxy this would need `X-Forwarded-For` handling, which the spike does not do.
