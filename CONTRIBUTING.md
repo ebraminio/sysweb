@@ -125,6 +125,7 @@ license in [LICENSE](LICENSE).
 ```text
 src/bin/syswebd.rs   entry points, panic handler, mem* shims
 src/async_server.rs  fixed-slot async connection state machine
+src/chat_server.rs   fixed-ring --chat mode
 src/server.rs        shared response/path helpers
 src/http.rs          request parsing
 src/path.rs          target decoding and normalization

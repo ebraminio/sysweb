@@ -180,6 +180,7 @@ pub trait Platform {
     ) -> Result<usize>;
     fn set_listener_nonblocking(&mut self, listener: &Self::Listener) -> Result<()>;
     fn accept_nonblocking(&mut self, listener: &Self::Listener) -> Result<Self::Stream>;
+    fn peer_addr(&mut self, stream: &Self::Stream) -> Result<SocketAddr>;
     fn read_nonblocking(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize>;
     fn write_nonblocking(&mut self, stream: &mut Self::Stream, buf: &[u8]) -> Result<usize>;
     fn send_file_nonblocking(

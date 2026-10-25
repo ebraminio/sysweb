@@ -16,6 +16,7 @@
 
 pub mod async_server;
 pub mod auth;
+pub mod chat_server;
 pub mod config;
 pub mod fixedbuf;
 pub mod http;
@@ -47,7 +48,13 @@ pub fn run(args: &[&[u8]]) -> ! {
             platform::write_stdout(b"\n");
             platform::exit(0)
         }
-        Ok(ParseOutcome::Run(config)) => async_server::run(platform::Sys::new(), config),
+        Ok(ParseOutcome::Run(config)) => {
+            if config.chat() {
+                chat_server::run(platform::Sys::new(), config)
+            } else {
+                async_server::run(platform::Sys::new(), config)
+            }
+        }
         Err(error) => {
             platform::write_stderr(b"syswebd: ");
             platform::write_stderr(error.message());

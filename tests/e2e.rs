@@ -1136,3 +1136,61 @@ fn http10_listing_uses_close_delimited_body() {
     assert_eq!(header(&head, "Connection"), Some("close"));
     assert!(text(body).contains("hello world.txt"));
 }
+
+#[test]
+fn chat_mode_serves_form_messages_and_polling() {
+    let server = start_server(&["--chat"]);
+    let port = server.port;
+
+    let page = text(&get(port, "/"));
+    assert!(page.contains("<form id=\"chat-form\""));
+    assert!(page.contains("<iframe src=\"/messages\""));
+    assert!(page.contains("e.key==='Enter'"));
+
+    let empty = text(&get(port, "/messages"));
+    assert!(empty.contains("No messages yet."));
+    assert!(empty.contains("XMLHttpRequest"));
+    assert!(empty.contains("data-me=\"127.0.0.1\""));
+
+    let body = b"text=one%20%3Ctwo%3E";
+    let head = format!(
+        "POST /chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let response = request_split(port, &head, body);
+    let (head, _) = split(&response);
+    assert_status(&head, "HTTP/1.1 303 See Other");
+    assert_eq!(header(&head, "Location"), Some("/"));
+
+    let page = text(&get(port, "/messages"));
+    assert!(page.contains("one &lt;two&gt;"));
+    assert!(page.contains("data-from=\"127.0.0.1\""));
+    assert!(page.contains("data-me=\"127.0.0.1\""));
+
+    let fragment = request(
+        port,
+        b"GET /messages?since=0 HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    );
+    let (head, body) = split(&fragment);
+    assert_status(&head, "HTTP/1.1 200 OK");
+    assert_eq!(header(&head, "X-Since"), Some("1"));
+    assert!(text(body).contains("one &lt;two&gt;"));
+
+    let static_response = get(port, "/index.html");
+    assert_status(&split(&static_response).0, "HTTP/1.1 404 Not Found");
+}
+
+#[test]
+fn chat_mode_respects_basic_auth() {
+    let server = start_server(&["--chat", "--userpass", "u:p"]);
+    let port = server.port;
+
+    let response = get(port, "/");
+    assert_status(&split(&response).0, "HTTP/1.1 401 Unauthorized");
+
+    let response = request(
+        port,
+        b"GET / HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic dTpw\r\n\r\n",
+    );
+    assert_status(&split(&response).0, "HTTP/1.1 200 OK");
+}

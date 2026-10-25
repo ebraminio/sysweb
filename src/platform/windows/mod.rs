@@ -187,6 +187,7 @@ unsafe extern "system" {
     fn bind(s: usize, addr: *const SockaddrIn, len: i32) -> i32;
     fn listen(s: usize, backlog: i32) -> i32;
     fn accept(s: usize, addr: *mut SockaddrIn, len: *mut i32) -> usize;
+    fn getpeername(s: usize, addr: *mut SockaddrIn, len: *mut i32) -> i32;
     fn recv(s: usize, buffer: *mut u8, len: i32, flags: i32) -> i32;
     fn send(s: usize, buffer: *const u8, len: i32, flags: i32) -> i32;
     fn closesocket(s: usize) -> i32;
@@ -947,6 +948,23 @@ impl Platform for Sys {
 
     fn set_listener_nonblocking(&mut self, listener: &Self::Listener) -> Result<()> {
         set_nonblocking(listener.0)
+    }
+
+    fn peer_addr(&mut self, stream: &Self::Stream) -> Result<SocketAddr> {
+        let mut addr = SockaddrIn {
+            family: AF_INET as u16,
+            port: [0; 2],
+            addr: [0; 4],
+            zero: [0; 8],
+        };
+        let mut len = core::mem::size_of::<SockaddrIn>() as i32;
+        if unsafe { getpeername(stream.0, &mut addr, &mut len) } == SOCKET_ERROR {
+            return Err(Self::last_wsa());
+        }
+        Ok(SocketAddr {
+            ip: addr.addr,
+            port: u16::from_be_bytes(addr.port),
+        })
     }
 
     fn accept_nonblocking(&mut self, listener: &Self::Listener) -> Result<Self::Stream> {

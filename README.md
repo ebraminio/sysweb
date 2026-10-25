@@ -2,10 +2,11 @@
 
 **A `no_std`, no-heap, syscall-first file-transfer server in Rust.**
 
-`sysweb` is a small static file server and browser upload tool in one binary.
-It has no runtime, no heap allocator, no third-party crates, no libc on Linux,
-and no C runtime (CRT) on Windows. The directory listing and upload UI are
-compiled into the binary, so there are no assets to install.
+`sysweb` is a small static file server, browser upload tool, and optional
+polling chat in one binary. It has no runtime, no heap allocator, no third-party
+crates, no libc on Linux, and no C runtime (CRT) on Windows. The directory
+listing and upload UI are compiled into the binary, so there are no assets to
+install.
 
 - `#![no_std]`: `core` only, no `std`;
 - no allocator: fixed buffers for requests, paths, headers, and listings;
@@ -27,6 +28,7 @@ compiled into the binary, so there are no assets to install.
 - classic multipart and GET text forms for old browsers with no File API;
 - `sendfile` file serving and streaming uploads;
 - optional HTTP Basic auth with `--userpass`;
+- `--chat` built-in local chat: no WebSocket, no history, XHR polling;
 - startup listing of all reachable interface URLs;
 - IPv4 only.
 
@@ -141,6 +143,23 @@ curl -r 0-1023 http://127.0.0.1:8080/report.pdf -o report.head
 curl -X PUT http://127.0.0.1:8080/notes/
 ```
 
+A small local chat is available as a separate mode. It is polling-based, keeps
+only the last 16 messages in memory, and does not require JavaScript for basic
+reading:
+
+```sh
+syswebd --chat --port 8080
+```
+
+Messages are shown with the sender's IP. Modern browsers use XHR to refresh
+just the message list; without JavaScript there is a manual Refresh link. There
+is no history and no WebSocket. `--root` is ignored in this mode. Basic auth
+applies if configured:
+
+```sh
+syswebd --chat --userpass 'user:pass'
+```
+
 Protect every route with Basic auth:
 
 ```sh
@@ -160,6 +179,7 @@ syswebd [OPTIONS]
 -H, --host <ADDR>      IPv4 address to bind (default: 0.0.0.0)
     --backlog <N>      Listen backlog (default: 128)
     --userpass <U:P>   Require HTTP Basic auth
+    --chat             Serve the built-in chat instead of files
     --upload           Enable PUT uploads and folder creation
     --replace          Allow uploads to replace existing files
     --no-index         Disable generated directory indexes
@@ -177,6 +197,7 @@ An explicit `--port` fails instead.
 This is a small, non-hardened server:
 
 - no TLS; Basic auth credentials are plaintext over HTTP;
+- chat messages are unencrypted and visible to anyone who can reach the port;
 - uploads are off by default and have no quota;
 - one slow client occupies one of the fixed connection slots;
 - there are no write timeouts, CSRF checks, or rate limits.

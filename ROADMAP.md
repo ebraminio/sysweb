@@ -45,6 +45,7 @@ The current release (milestone 0.5).
 - [x] `sendfile` file serving, with SIGPIPE-safe aborted downloads.
 - [x] Streaming `multipart/form-data` form uploads for old/no-JS browsers,
       plus a no-JS form in the directory index.
+- [x] Optional `--chat` polling mode: fixed ring, XHR fragments, no WebSocket.
 - [x] Reusable `scripts/check-binary.sh` and `scripts/check-no-deps.sh` used
       by CI.
 - [x] Per-commit GitHub Releases for Linux x86_64/aarch64 and macOS arm64,

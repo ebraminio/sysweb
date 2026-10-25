@@ -71,6 +71,7 @@ pub struct Config {
     backlog: u16,
     quiet: bool,
     upload: bool,
+    chat: bool,
     replace: bool,
     index: bool,
     port_explicit: bool,
@@ -98,6 +99,7 @@ impl Config {
         let mut root: &[u8] = b".";
         let mut quiet = false;
         let mut upload = false;
+        let mut chat = false;
         let mut replace = false;
         let mut index = true;
         let mut port_explicit = false;
@@ -146,6 +148,11 @@ impl Config {
             }
             if arg == b"--upload" {
                 upload = true;
+                i += 1;
+                continue;
+            }
+            if arg == b"--chat" {
+                chat = true;
                 i += 1;
                 continue;
             }
@@ -226,6 +233,7 @@ impl Config {
             backlog,
             quiet,
             upload,
+            chat,
             replace,
             index,
             port_explicit,
@@ -254,6 +262,10 @@ impl Config {
 
     pub const fn upload(&self) -> bool {
         self.upload
+    }
+
+    pub const fn chat(&self) -> bool {
+        self.chat
     }
 
     pub const fn replace(&self) -> bool {

@@ -459,6 +459,10 @@ impl Platform for Sys {
         }
     }
 
+    fn peer_addr(&mut self, stream: &Self::Stream) -> Result<SocketAddr> {
+        abi::peer_addr(stream.fd)
+    }
+
     fn read_nonblocking(&mut self, stream: &mut Self::Stream, buf: &mut [u8]) -> Result<usize> {
         loop {
             match abi::read(stream.fd, buf) {

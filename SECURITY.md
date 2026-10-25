@@ -1,6 +1,7 @@
 # Security policy
 
-`sysweb` is a **file-transfer server in an early milestone**. It is suitable
+`sysweb` is a **file-transfer server with an optional chat mode in an early
+milestone**. It is suitable
 for local development, trusted LANs, and moving files between machines you
 control. It is **not** hardened for direct exposure to the public internet.
 
@@ -35,6 +36,7 @@ In scope:
 - client disconnects and partial writes;
 - malicious uploads, stored XSS, disk exhaustion;
 - cross-site requests against a `--host 127.0.0.1` server;
+- chat message injection and chat flooding;
 - resource exhaustion through slow or many connections.
 
 Out of scope for 0.1:
@@ -73,9 +75,13 @@ Out of scope for 0.1:
   `SIGPIPE` process-wide for `sendfile`, and macOS sets `SO_NOSIGPIPE` on every
   accepted socket. An aborted download yields `EPIPE`, not process death.
 - **Bounded multipart forms.** Classic `POST` forms use a streaming parser with
-  a 32 KiB buffer; filenames are reduced to a basename and reject separators,
+  an 8 KiB buffer; filenames are reduced to a basename and reject separators,
   controls, NUL, `.` and `..`; only one file part is accepted; non-file fields
   are discarded. There is no per-request size cap.
+- **Chat is bounded and escaped.** The `--chat` ring holds 16 short messages,
+  escapes HTML, rejects oversized form bodies, and exposes no file paths. It is
+  plaintext HTTP and keeps no history. Basic auth applies when configured, but
+  there is no per-IP rate limit.
 - **Read-only by default.** Files are opened `O_RDONLY`; uploads and folder
   creation require `--upload`, and overwriting requires `--replace`.
 - **No symlinks beneath the document root.** Linux uses `openat2` with
@@ -96,7 +102,7 @@ Out of scope for 0.1:
 ### Latest-API floor
 
 There are no compatibility fallbacks: Linux 5.6+ (`openat2`), macOS 11+
-(`O_NOFOLLOW_ANY`), and Windows 10 1809+ (IOCP) are the minimums. Older hosts
+(`O_NOFOLLOW_ANY`), and Windows 10 1809+ (`WSAPoll`) are the minimums. Older hosts
 are unsupported, not emulated.
 
 ### No TLS
@@ -105,13 +111,14 @@ Traffic is plaintext. Basic auth credentials are only base64-encoded, not
 encrypted. Do not send credentials or sensitive data. Put a TLS
 terminator in front if you need HTTPS.
 
-### Single-threaded blocking I/O
+### Single-threaded async I/O
 
-One connection at a time. A client that opens a connection and sends nothing
-blocks every other client indefinitely. There are no read/write timeouts yet.
-Do not expose the server to untrusted networks until the async reactor and
-timeouts land (milestone 1/2). A reverse proxy with timeouts can mitigate this
-in the meantime.
+The server uses a readiness reactor and a fixed number of connection slots.
+There are no read/write rate limits; a slow or idle connection occupies one
+slot until it closes or the idle timeout expires. Chat polling uses short
+requests, but chat flooding can still fill the fixed ring and keep slots busy.
+Do not expose the server to untrusted networks without a reverse proxy and
+timeouts.
 
 ### Symlinks
 

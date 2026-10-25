@@ -132,6 +132,8 @@ unsafe extern "C" {
     fn c_listen(fd: i32, backlog: i32) -> i32;
     #[link_name = "accept"]
     fn c_accept(fd: i32, addr: *mut u8, len: *mut u32) -> i32;
+    #[link_name = "getpeername"]
+    fn c_getpeername(fd: i32, addr: *mut u8, len: *mut u32) -> i32;
     #[link_name = "read"]
     fn c_read(fd: i32, buf: *mut c_void, count: usize) -> isize;
     #[link_name = "write"]
@@ -288,6 +290,22 @@ pub fn listen(fd: i32, backlog: u16) -> Result<()> {
 
 pub fn accept(fd: i32) -> Result<i32> {
     cvt(unsafe { c_accept(fd, null_mut(), null_mut()) })
+}
+
+pub fn peer_addr(fd: i32) -> Result<SocketAddr> {
+    let mut addr = SockaddrIn {
+        len: core::mem::size_of::<SockaddrIn>() as u8,
+        family: AF_INET as u8,
+        port: [0; 2],
+        addr: [0; 4],
+        zero: [0; 8],
+    };
+    let mut len = core::mem::size_of::<SockaddrIn>() as u32;
+    cvt(unsafe { c_getpeername(fd, &mut addr as *mut SockaddrIn as *mut u8, &mut len) })?;
+    Ok(SocketAddr {
+        ip: addr.addr,
+        port: u16::from_be_bytes(addr.port),
+    })
 }
 
 pub fn read(fd: i32, buf: &mut [u8]) -> Result<usize> {

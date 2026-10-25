@@ -471,6 +471,19 @@ Known unsafe edges: the raw syscall/libSystem FFI declarations, the `argv`
 dereference, and the `mem*` shims. All are isolated and
 reviewable.
 
+## Chat mode
+
+`--chat` selects a separate reactor with its own fixed slots. It serves only:
+
+- `GET /` — form page;
+- `GET /messages` — current ring, or an XHR fragment with `?since=N`;
+- `POST /chat` — URL-encoded `text=`, then `303 See Other`.
+
+The state is a 16-message ring with the peer IPv4 address and a sequence number.
+There is no persistence, no WebSocket, and no file serving in this mode. Browsers
+with XHR poll in the background; without JavaScript the page falls back to a
+manual Refresh link. Messages are newest-first and use `prefers-color-scheme`.
+
 ## Async design (milestone 1)
 
 Backend status: Linux uses epoll, macOS uses kqueue, and both run the same

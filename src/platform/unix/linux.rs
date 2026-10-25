@@ -16,6 +16,7 @@ mod nr {
     pub const STATX: usize = 332;
     pub const SOCKET: usize = 41;
     pub const ACCEPT4: usize = 288;
+    pub const GETPEERNAME: usize = 52;
     pub const IOCTL: usize = 16;
     pub const SENDFILE: usize = 40;
     pub const SENDTO: usize = 44;
@@ -42,6 +43,7 @@ mod nr {
     pub const STATX: usize = 291;
     pub const SOCKET: usize = 198;
     pub const ACCEPT4: usize = 242;
+    pub const GETPEERNAME: usize = 205;
     pub const IOCTL: usize = 29;
     pub const SENDFILE: usize = 71;
     pub const SENDTO: usize = 206;
@@ -389,6 +391,32 @@ pub fn accept_nonblocking(fd: i32) -> Result<i32> {
         return Err(error);
     }
     Ok(stream)
+}
+
+pub fn peer_addr(fd: i32) -> Result<SocketAddr> {
+    let mut addr = SockaddrIn {
+        family: AF_INET as u16,
+        port: [0; 2],
+        addr: [0; 4],
+        zero: [0; 8],
+    };
+    let mut len = core::mem::size_of::<SockaddrIn>() as u32;
+    let result = unsafe {
+        syscall6(
+            GETPEERNAME,
+            fd as usize,
+            &mut addr as *mut SockaddrIn as usize,
+            &mut len as *mut u32 as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    decode(result)?;
+    Ok(SocketAddr {
+        ip: addr.addr,
+        port: u16::from_be_bytes(addr.port),
+    })
 }
 
 pub fn read(fd: i32, buf: &mut [u8]) -> Result<usize> {
