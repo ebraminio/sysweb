@@ -68,18 +68,23 @@ impl Chat {
         }
     }
 
-    fn render(&self) -> String {
+    fn render(&self, me: &[u8]) -> String {
         let mut out = String::new();
         out.push_str("<!doctype html><meta charset=\"utf-8\">");
         out.push_str("<title>chat</title><style>");
         out.push_str(
-            "body{font:14px monospace;margin:0;padding:8px;background:#f5f6f8;color:#16181d}\
-             .line{margin:0 0 12px}\
-             .from{color:#4a5568;font-weight:bold;margin-bottom:2px}\
-             .text{padding-left:1em;white-space:pre-wrap;overflow-wrap:anywhere}\
-             .empty{color:#777}a{color:#0645ad}",
+            "body{font:15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:10px;background:#f2f2f7;color:#1c1c1e}\
+             .line{display:flex;flex-direction:column;align-items:flex-start;margin:0 0 14px}\
+             .from{color:#8e8e93;font-size:11px;line-height:1.2;margin:0 0 4px 14px}\
+             .bubble{background:#e5e5ea;border-radius:18px;border-bottom-left-radius:5px;padding:8px 13px;max-width:80%;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-wrap:break-word}\
+             .line.mine{align-items:flex-end}\
+             .line.mine .from{margin:0 14px 4px 0}\
+             .line.mine .bubble{background:#0a84ff;color:#fff;border-bottom-left-radius:18px;border-bottom-right-radius:5px}\
+             .empty{color:#8e8e93;text-align:center;margin:24px 0}a{color:#0a84ff}",
         );
-        out.push_str("</style><div id=\"messages\" data-since=\"");
+        out.push_str("</style><div id=\"messages\" data-me=\"");
+        escape_html(&mut out, me);
+        out.push_str("\" data-since=\"");
         out.push_str(&self.next_seq.to_string());
         out.push_str("\">");
         if self.count == 0 {
@@ -96,6 +101,12 @@ impl Chat {
         out.push_str("<script>(function(){");
         out.push_str("var box=document.getElementById('messages');if(!box)return;");
         out.push_str("var since=Number(box.getAttribute('data-since'))||0;var busy=false;");
+        out.push_str("var me=box.getAttribute('data-me')||'';");
+        out.push_str("function paint(){if(!box.getElementsByClassName)return;");
+        out.push_str("var lines=box.getElementsByClassName('line');");
+        out.push_str("for(var i=0;i<lines.length;i++){var line=lines[i];");
+        out.push_str("line.className=(line.getAttribute('data-from')===me)?'line mine':'line';}}");
+        out.push_str("paint();");
         out.push_str("function selected(){try{if(window.getSelection&&String(window.getSelection()))return true;}catch(e){}");
         out.push_str("try{if(document.selection&&document.selection.createRange().text)return true;}catch(e){}return false;}");
         out.push_str("function poll(){if(busy||selected())return;busy=true;");
@@ -104,7 +115,7 @@ impl Chat {
         out.push_str("if(x.status!==200)return;var latest=x.getResponseHeader('X-Since');");
         out.push_str("if(latest)since=Number(latest);");
         out.push_str("if(x.responseText){if(box.insertAdjacentHTML)box.insertAdjacentHTML('afterbegin',x.responseText);");
-        out.push_str("else box.innerHTML=x.responseText+box.innerHTML;}};");
+        out.push_str("else box.innerHTML=x.responseText+box.innerHTML;paint();}};");
         out.push_str("x.open('GET','/messages?since='+since,true);x.send(null);}");
         out.push_str("setInterval(poll,1000);poll();})();</script>");
         out
@@ -237,7 +248,7 @@ fn handle(mut stream: TcpStream, chat: &Mutex<Chat>) -> std::io::Result<()> {
                     latest,
                 )
             } else {
-                let page = chat.lock().unwrap().render();
+                let page = chat.lock().unwrap().render(from.as_bytes());
                 respond(
                     &mut stream,
                     200,
@@ -264,9 +275,11 @@ fn form_page() -> String {
     out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
     out.push_str("<title>chat</title><style>");
     out.push_str(
-        "body{font:15px monospace;margin:0;padding:12px;background:#f5f6f8;color:#16181d}\
-         form{margin:0 0 12px}textarea{width:100%;box-sizing:border-box;padding:8px;font:inherit}\
-         button{margin-top:8px;padding:8px 12px;font:inherit}iframe{width:100%;height:65vh;border:1px solid #ccc;background:#fff}",
+        "body{font:15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:12px;background:#f2f2f7;color:#1c1c1e}\
+         form{display:flex;gap:8px;align-items:flex-end;margin:0 0 12px}\
+         textarea{flex:1;box-sizing:border-box;padding:9px 12px;font:inherit;border:1px solid #c7c7cc;border-radius:18px;background:#fff;resize:vertical;min-height:44px;max-height:160px}\
+         button{padding:10px 16px;font:inherit;font-weight:600;border:0;border-radius:18px;background:#0a84ff;color:#fff}\
+         iframe{width:100%;height:65vh;border:1px solid #d1d1d6;border-radius:16px;background:#f2f2f7}",
     );
     out.push_str("</style>");
     out.push_str("<form id=\"chat-form\" method=\"post\" action=\"/chat\">");
@@ -283,9 +296,11 @@ fn form_page() -> String {
 fn render_message(out: &mut String, message: &Message) {
     out.push_str("<div class=\"line\" data-seq=\"");
     out.push_str(&message.seq.to_string());
+    out.push_str("\" data-from=\"");
+    escape_html(out, &message.from[..message.from_len]);
     out.push_str("\"><div class=\"from\">");
     escape_html(out, &message.from[..message.from_len]);
-    out.push_str("</div><div class=\"text\">");
+    out.push_str("</div><div class=\"bubble\">");
     escape_html(out, &message.text[..message.len]);
     out.push_str("</div></div>");
 }
@@ -451,6 +466,7 @@ fn escape_html(out: &mut String, bytes: &[u8]) {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&#39;"),
+            '\r' => {}
             '\n' => out.push_str("<br>"),
             ch => out.push(ch),
         }

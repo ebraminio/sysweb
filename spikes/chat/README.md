@@ -48,15 +48,23 @@ bytes**, plus the peer IP address, and clears it on restart.
 The form and the message list are separate, so message updates do not erase
 half-typed input.
 
-Messages are newest-first. The sender address is on its own line and the text
-is indented beneath it:
+Messages are newest-first. The sender address is on its own line above an
+iOS-style bubble:
 
 ```html
-<div class="line">
+<div class="line" data-seq="2" data-from="127.0.0.1">
   <div class="from">127.0.0.1</div>
-  <div class="text">line one<br>line two</div>
+  <div class="bubble">line one<br>line two</div>
 </div>
 ```
+
+When JavaScript is available, the iframe compares `data-from` with its own
+`data-me` peer address and aligns messages from that address to the right in a
+blue bubble. Other senders remain on the left.
+
+The form uses a rounded textarea and a blue send button. The textarea’s CRLF is
+normalized to a single `<br>`, so a multiline message does not get a double line
+break.
 
 When JavaScript is available, **Enter** submits and **Ctrl+Enter** inserts a
 newline. Without JavaScript, the textarea keeps its normal Enter behavior and
@@ -106,7 +114,8 @@ use the existing reactor and the same short polling responses.
 - HTML escaping, a message-length cap, and the peer IP;
 - sequence numbers for the `since` fragment;
 - no persistence and no WebSocket;
-- newest-first rendering, sender on its own line, and indented text;
+- newest-first rendering, sender on its own line, and iOS-style bubbles;
+- own-address detection for right-aligned messages;
 - Basic auth via `--userpass` if desired.
 
 The old-browser UX is still entirely HTTP: a form, a 303, an iframe, and XHR
