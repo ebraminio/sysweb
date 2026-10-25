@@ -1,0 +1,18 @@
+[package]
+name = "chat-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "chat-spike"
+path = "src/main.rs"
+test = false
+bench = false
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+[workspace]

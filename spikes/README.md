@@ -42,4 +42,11 @@ state and no keep-alive. It reaches 10k connections on loopback and includes an
 API comparison with XDP/eBPF/AF_XDP, which could not be loaded on the available
 Wi-Fi-only host.
 
+## `chat`
+
+A no-JavaScript old-browser chat experiment: form POST, 303 redirect, and an
+iframe refreshed by `<meta http-equiv="refresh">`. It demonstrates the polling
+shape without WebSocket, plus the fixed-ring state a sysweb chat mode would
+need.
+
 Each directory has its own build/run notes.
