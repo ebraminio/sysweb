@@ -71,6 +71,7 @@ impl Chat {
     fn render(&self, me: &[u8]) -> String {
         let mut out = String::new();
         out.push_str("<!doctype html><meta charset=\"utf-8\">");
+        out.push_str("<meta name=\"color-scheme\" content=\"light dark\">");
         out.push_str("<title>chat</title><style>");
         out.push_str(
             "body{font:15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:12px 20px 24px;background:#f2f2f7;color:#1c1c1e;box-sizing:border-box}\
@@ -80,7 +81,10 @@ impl Chat {
              .line.mine{align-items:flex-end}\
              .line.mine .from{margin:0 14px 4px 0}\
              .line.mine .bubble{background:#0a84ff;color:#fff;border-bottom-left-radius:18px;border-bottom-right-radius:5px}\
-             .empty{color:#8e8e93;text-align:center;margin:24px 0}a{color:#0a84ff}",
+             .empty{color:#8e8e93;text-align:center;margin:24px 0}a{color:#0a84ff}\
+             @media (prefers-color-scheme: dark){body{background:#101216;color:#e7eaf0}\
+             .from,.empty{color:#9aa3b2}.bubble{background:#171a20;color:#e7eaf0}\
+             .line.mine .bubble{background:#0a84ff;color:#fff}a{color:#7bb8ff}}",
         );
         out.push_str("</style><div id=\"messages\" data-me=\"");
         escape_html(&mut out, me);
@@ -272,6 +276,7 @@ fn handle(mut stream: TcpStream, chat: &Mutex<Chat>) -> std::io::Result<()> {
 fn form_page() -> String {
     let mut out = String::new();
     out.push_str("<!doctype html><meta charset=\"utf-8\">");
+    out.push_str("<meta name=\"color-scheme\" content=\"light dark\">");
     out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
     out.push_str("<title>chat</title><style>");
     out.push_str(
@@ -279,7 +284,10 @@ fn form_page() -> String {
          form{display:flex;gap:8px;align-items:flex-end;margin:0 0 12px}\
          textarea{flex:1;box-sizing:border-box;padding:9px 12px;font:inherit;border:1px solid #c7c7cc;border-radius:18px;background:#fff;resize:vertical;min-height:44px;max-height:160px}\
          button{padding:10px 16px;font:inherit;font-weight:600;border:0;border-radius:18px;background:#0a84ff;color:#fff}\
-         iframe{width:100%;height:65vh;border:1px solid #d1d1d6;border-radius:16px;background:#f2f2f7}",
+         iframe{width:100%;height:65vh;border:1px solid #d1d1d6;border-radius:16px;background:#f2f2f7}\
+         @media (prefers-color-scheme: dark){body{background:#101216;color:#e7eaf0}\
+         textarea{background:#101216;border-color:#272c35;color:#e7eaf0}\
+         iframe{background:#101216;border-color:#272c35}}",
     );
     out.push_str("</style>");
     out.push_str("<form id=\"chat-form\" method=\"post\" action=\"/chat\">");

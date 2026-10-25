@@ -66,6 +66,9 @@ The form uses a rounded textarea and a blue send button. The textarea’s CRLF i
 normalized to a single `<br>`, so a multiline message does not get a double line
 break.
 
+Both pages declare `color-scheme: light dark` and use a
+`prefers-color-scheme: dark` override like the sysweb listing page.
+
 When JavaScript is available, **Enter** submits and **Ctrl+Enter** inserts a
 newline. Without JavaScript, the textarea keeps its normal Enter behavior and
 the Send button submits.
