@@ -73,6 +73,7 @@ use the existing reactor and the same short polling responses.
   4.6 KiB response buffer if the text limit is raised;
 - HTML escaping, a message-length cap, and the peer IP;
 - no persistence and no WebSocket;
+- newest-first rendering, sender on its own line, and indented text;
 - Basic auth via `--userpass` if desired.
 
 The interesting part is that the old-browser UX is entirely HTTP: a form, a

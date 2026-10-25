@@ -69,22 +69,23 @@ impl Chat {
         out.push_str("<title>chat</title><style>");
         out.push_str(
             "body{font:14px monospace;margin:0;padding:8px;background:#f5f6f8;color:#16181d}\
-             .line{margin:0 0 10px;white-space:pre-wrap;overflow-wrap:anywhere}\
-             .from{color:#4a5568;font-weight:bold;margin-right:8px}\
+             .line{margin:0 0 12px}\
+             .from{color:#4a5568;font-weight:bold;margin-bottom:2px}\
+             .text{padding-left:1em;white-space:pre-wrap;overflow-wrap:anywhere}\
              .empty{color:#777}",
         );
         out.push_str("</style>");
         if self.count == 0 {
             out.push_str("<p class=\"empty\">No messages yet.</p>");
         } else {
-            let start = (self.head + MAX_MESSAGES - self.count) % MAX_MESSAGES;
+            let newest = (self.head + MAX_MESSAGES - 1) % MAX_MESSAGES;
             for i in 0..self.count {
-                let message = &self.messages[(start + i) % MAX_MESSAGES];
-                out.push_str("<p class=\"line\"><span class=\"from\">");
+                let message = &self.messages[(newest + MAX_MESSAGES - i) % MAX_MESSAGES];
+                out.push_str("<div class=\"line\"><div class=\"from\">");
                 escape_html(&mut out, &message.from[..message.from_len]);
-                out.push_str("</span>");
+                out.push_str("</div><div class=\"text\">");
                 escape_html(&mut out, &message.text[..message.len]);
-                out.push_str("</p>");
+                out.push_str("</div></div>");
             }
         }
         out
@@ -219,10 +220,14 @@ fn form_page() -> String {
          button{margin-top:8px;padding:8px 12px;font:inherit}iframe{width:100%;height:65vh;border:1px solid #ccc;background:#fff}",
     );
     out.push_str("</style>");
-    out.push_str("<form method=\"post\" action=\"/chat\">");
-    out.push_str("<textarea name=\"text\" rows=\"4\" maxlength=\"400\" autofocus autocomplete=\"off\"></textarea>");
+    out.push_str("<form id=\"chat-form\" method=\"post\" action=\"/chat\">");
+    out.push_str("<textarea id=\"chat-text\" name=\"text\" rows=\"4\" maxlength=\"400\" autofocus autocomplete=\"off\"></textarea>");
     out.push_str("<button type=\"submit\">Send</button></form>");
     out.push_str("<iframe src=\"/messages\" title=\"messages\"></iframe>");
+    out.push_str("<script>(function(){var f=document.getElementById('chat-form'),t=document.getElementById('chat-text');");
+    out.push_str("if(!f||!t||!t.addEventListener)return;");
+    out.push_str("t.addEventListener('keydown',function(e){if(e.isComposing)return;");
+    out.push_str("if(e.key==='Enter'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();f.submit();}});})();</script>");
     out
 }
 
