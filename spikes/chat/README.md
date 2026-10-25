@@ -1,11 +1,11 @@
 # Old-browser chat spike
 
-A small local-network chat experiment with **no WebSocket**. The baseline works
-without JavaScript; modern browsers get incremental polling instead of page
-reloads.
+A small local-network chat experiment with **no WebSocket**. It uses XHR
+polling, which is old enough to cover most browsers that can do background
+requests at all.
 
-The form lives in the page. The message list lives in an iframe. A message POST
-is answered with `303 See Other`, so refreshing the form never resubmits it.
+The form lives in the page and the message list lives in an iframe. A message
+POST is answered with `303 See Other`, so refreshing never resubmits it.
 
 This is a protocol/UI prototype, not production code. It uses std threads and a
 heap mutex; a sysweb version would keep the ring in `run` and use fixed slots.
@@ -28,7 +28,6 @@ http://127.0.0.1:19550/
 ```text
 GET /                     form + iframe
 GET /messages             full message page
-GET /messages?pause=1     no auto-refresh; copy-friendly
 GET /messages?since=N     HTML fragment for N+1..; X-Since header
 POST /chat                text=...; prepend; 303 Location: /
 ```
@@ -46,7 +45,7 @@ bytes**, plus the peer IP address, and clears it on restart.
 <iframe src="/messages"></iframe>
 ```
 
-The form and the message list are separate, so a message update does not erase
+The form and the message list are separate, so message updates do not erase
 half-typed input.
 
 Messages are newest-first. The sender address is on its own line and the text
@@ -63,20 +62,28 @@ When JavaScript is available, **Enter** submits and **Ctrl+Enter** inserts a
 newline. Without JavaScript, the textarea keeps its normal Enter behavior and
 the Send button submits.
 
-## Copying text
+## Updates and copying
 
-`<meta http-equiv="refresh">` replaces the document and therefore destroys the
-browser selection. This spike handles that in two ways:
+`/messages` has no meta refresh and no pause link. A small XHR loop does:
 
-- `/messages?pause=1` omits the refresh and shows a “Resume live updates” link;
-- modern browsers run a small polling script and remove the meta refresh.
+```text
+GET /messages?since=N
+```
 
-The polling script fetches `/messages?since=N`, inserts only new messages at
-the top, and **skips the update while there is a text selection**. Previously
-rendered messages are not replaced, so a selection can survive new messages
-arriving.
+It prepends only new messages and leaves the rest of the DOM alone. If there is
+a text selection, the update is skipped until the selection is cleared, so
+copying survives new messages arriving.
 
-Without JavaScript, pause first, then copy.
+The code uses `XMLHttpRequest`, `onreadystatechange`, `insertAdjacentHTML`, and
+a `document.selection` fallback rather than `fetch`/Promises.
+
+Without JavaScript there is no automatic update; the page shows:
+
+```html
+<noscript>Automatic updates need JavaScript. <a href="/messages">Refresh</a>.</noscript>
+```
+
+So the no-JS view is static and copyable, with manual refresh.
 
 ## Why polling, not long-poll
 
@@ -102,8 +109,8 @@ use the existing reactor and the same short polling responses.
 - newest-first rendering, sender on its own line, and indented text;
 - Basic auth via `--userpass` if desired.
 
-The interesting part is that the old-browser UX is entirely HTTP: a form, a
-303, an iframe, a meta refresh, and a pause link.
+The old-browser UX is still entirely HTTP: a form, a 303, an iframe, and XHR
+fragments.
 
 ## Try it
 
