@@ -73,10 +73,10 @@ impl Chat {
         out.push_str("<!doctype html><meta charset=\"utf-8\">");
         out.push_str("<title>chat</title><style>");
         out.push_str(
-            "body{font:15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:10px;background:#f2f2f7;color:#1c1c1e}\
+            "body{font:15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:12px 20px 24px;background:#f2f2f7;color:#1c1c1e;box-sizing:border-box}\
              .line{display:flex;flex-direction:column;align-items:flex-start;margin:0 0 14px}\
              .from{color:#8e8e93;font-size:11px;line-height:1.2;margin:0 0 4px 14px}\
-             .bubble{background:#e5e5ea;border-radius:18px;border-bottom-left-radius:5px;padding:8px 13px;max-width:80%;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-wrap:break-word}\
+             .bubble{background:#e5e5ea;border-radius:18px;border-bottom-left-radius:5px;padding:8px 13px;max-width:78%;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;word-wrap:break-word}\
              .line.mine{align-items:flex-end}\
              .line.mine .from{margin:0 14px 4px 0}\
              .line.mine .bubble{background:#0a84ff;color:#fff;border-bottom-left-radius:18px;border-bottom-right-radius:5px}\
@@ -275,7 +275,7 @@ fn form_page() -> String {
     out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
     out.push_str("<title>chat</title><style>");
     out.push_str(
-        "body{font:15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:12px;background:#f2f2f7;color:#1c1c1e}\
+        "body{font:15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:16px 20px;background:#f2f2f7;color:#1c1c1e;box-sizing:border-box}\
          form{display:flex;gap:8px;align-items:flex-end;margin:0 0 12px}\
          textarea{flex:1;box-sizing:border-box;padding:9px 12px;font:inherit;border:1px solid #c7c7cc;border-radius:18px;background:#fff;resize:vertical;min-height:44px;max-height:160px}\
          button{padding:10px 16px;font:inherit;font-weight:600;border:0;border-radius:18px;background:#0a84ff;color:#fff}\
