@@ -20,9 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Ensure Rust components
+        run: rustup component add clippy rustfmt
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -59,8 +58,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
 
       - name: Format
         shell: bash
@@ -121,9 +118,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
+      - name: Add aarch64 target
+        run: rustup target add aarch64-unknown-linux-gnu
 
       - name: Type-check the aarch64 syscall backend
         run: cargo check --target aarch64-unknown-linux-gnu
