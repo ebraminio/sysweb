@@ -33,7 +33,7 @@ implemented:
 | Linux async | `io_uring` (not epoll) | Linux 5.1+ (milestone 2) |
 | Linux zero-copy | `sendfile` | Linux 2.6 |
 | macOS open/containment | `O_NOFOLLOW_ANY` | macOS 11 |
-| macOS directories | `fdopendir`/`readdir` | public libSystem |
+| macOS directories | `getattrlistbulk` | public libSystem |
 | macOS metadata | `fstatat` + SDK `struct stat` | 64-bit-inode macOS |
 | macOS async | `kqueue`/`kevent` | macOS 10.5+ |
 | macOS ABI | libSystem functions | macOS 11+ |
@@ -269,14 +269,14 @@ numbers:
 - `openat`, `fstat`, `fstatat`, `unlinkat`, `mkdirat`;
 - `socket`, `bind`, `listen`, `accept`, `setsockopt`;
 - `read`, `write`, `send`, `sendfile`, `close`, `poll`;
-- `fdopendir`, `readdir`, `closedir`;
+- `getattrlistbulk` for directory entries;
 - `__error` for errno and `_exit` for termination.
 
 `build.rs` adds `-lSystem`; the binary still has no CRT, no `std`, no
 allocator, and no third-party crates. The tradeoff is explicit: `nm -u` now
 lists a small allowlisted set of libSystem functions, checked by
-`scripts/check-binary.sh`. Directory iteration uses `fdopendir`/`readdir`,
-which may allocate inside libSystem; the binary itself never links an
+`scripts/check-binary.sh`. Directory iteration uses `getattrlistbulk` with a
+caller-owned 4 KiB buffer, so it does not use libSystem's `DIR`/`readdir`
 allocator.
 
 `AT_FDCWD` is `-2`, `sockaddr_in` begins with a length byte, `SOL_SOCKET` is
@@ -433,9 +433,9 @@ Rust does have `static`, `static mut`, function-local `static`, and
 service-side globals so state stays in caller buffers and writable sections do
 not appear.
 
-On macOS, `fdopendir`/`readdir` may allocate inside libSystem; that allocator
-is not linked into `syswebd`, and it is the only known hidden allocation on the
-macOS path.
+On macOS, directory iteration uses `getattrlistbulk` with a caller buffer and
+does not allocate. `getifaddrs` at startup may allocate and free inside
+libSystem; that allocator is not linked into `syswebd`.
 
 ## Safety invariants
 
@@ -661,10 +661,9 @@ several.
 
 ## Known risks
 
-- **macOS libSystem allocation**: `fdopendir`/`readdir` may allocate inside
-  libSystem even though the binary has no allocator. Moving to
-  `getattrlistbulk` would remove that allocation without returning to private
-  syscall numbers.
+- **macOS startup allocation**: `getifaddrs` may allocate and free inside
+  libSystem while collecting interface addresses. Directory iteration now uses
+  `getattrlistbulk` with a caller buffer.
 - **Single-threaded async**: a slow client occupies one fixed slot; there is no
   per-request write deadline yet.
 - **Symlinks**: all links beneath the root are refused. The root's own path

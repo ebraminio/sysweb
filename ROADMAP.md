@@ -273,9 +273,6 @@ Every milestone must preserve:
 
 ## Open questions
 
-- Should macOS directory enumeration move from `readdir` to
-  `getattrlistbulk` to avoid libSystem-internal allocation while keeping the
-  public ABI?
 - How much of io_uring should be used directly (`IORING_OP_*`) versus keeping
   the portable readiness layer for macOS/Windows parity?
 - Does `splice` or io_uring `SEND_ZC` measurably beat `sendfile` for files that

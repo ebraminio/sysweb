@@ -194,10 +194,11 @@ syscall numbers or kernel `struct stat` layouts. The release binary links
 `libSystem` (which ld64 requires anyway) and imports only an allowlist of
 functions checked by `scripts/check-binary.sh`. There is no CRT or `std`.
 
-`fdopendir`/`readdir` may allocate inside libSystem; the binary itself has no
-allocator. Linux remains the libc-free target. A wrong SDK `struct stat` layout
-would still produce incorrect responses, but the public libSystem ABI is the
-stable interface Apple supports.
+Directory iteration uses `getattrlistbulk` with a caller-owned buffer rather
+than the `DIR`/`readdir` allocator. The binary itself has no allocator. Linux
+remains the libc-free target. A wrong SDK `struct stat` layout would still
+produce incorrect responses, but the public libSystem ABI is the stable
+interface Apple supports.
 
 ### No privilege dropping
 

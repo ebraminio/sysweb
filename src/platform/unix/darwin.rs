@@ -4,8 +4,8 @@
 //! layout. libSystem is the stable interface, and ld64 requires linking it for
 //! any dynamic executable anyway. This backend imports only the libSystem
 //! functions below; it does not use the C runtime startup, std, or an
-//! allocator. Directory iteration uses `fdopendir`/`readdir`, which may
-//! allocate inside libSystem.
+//! allocator. Directory iteration uses `getattrlistbulk` with a caller-owned
+//! buffer, avoiding libSystem's DIR/readdir allocator.
 
 use crate::path::MAX_PATH;
 use crate::platform::{Error, FileInfo, Interface, Result, SocketAddr};
@@ -68,6 +68,23 @@ struct Stat {
 }
 
 #[repr(C)]
+struct AttrList {
+    bitmapcount: u16,
+    reserved: u16,
+    commonattr: u32,
+    volattr: u32,
+    dirattr: u32,
+    fileattr: u32,
+    forkattr: u32,
+}
+
+#[repr(C)]
+struct AttrReference {
+    offset: i32,
+    length: u32,
+}
+
+#[repr(C)]
 struct SockaddrIn {
     len: u8,
     family: u8,
@@ -97,16 +114,6 @@ struct IfAddrs {
     netmask: *const SockaddrIn,
     ifu: *const SockaddrIn,
     data: *mut u8,
-}
-
-#[repr(C)]
-struct Dirent {
-    d_ino: u64,
-    d_seekoff: i64,
-    d_reclen: u16,
-    d_namlen: u16,
-    d_type: u8,
-    d_name: [u8; 1024],
 }
 
 unsafe extern "C" {
@@ -159,12 +166,14 @@ unsafe extern "C" {
     fn c_getifaddrs(out: *mut *mut IfAddrs) -> i32;
     #[link_name = "freeifaddrs"]
     fn c_freeifaddrs(list: *mut IfAddrs);
-    #[link_name = "fdopendir"]
-    fn c_fdopendir(fd: i32) -> *mut u8;
-    #[link_name = "readdir"]
-    fn c_readdir(dirp: *mut u8) -> *mut Dirent;
-    #[link_name = "closedir"]
-    fn c_closedir(dirp: *mut u8) -> i32;
+    #[link_name = "getattrlistbulk"]
+    fn c_getattrlistbulk(
+        dirfd: i32,
+        attrlist: *const AttrList,
+        attr_buf: *mut c_void,
+        attr_buf_size: usize,
+        options: u64,
+    ) -> i32;
     #[link_name = "__error"]
     fn c_error() -> *mut i32;
     #[link_name = "_exit"]
@@ -577,45 +586,99 @@ pub fn remove_file(dir_fd: i32, path: &[u8]) -> Result<()> {
     result.map(|_| ())
 }
 
-pub fn dir_open(fd: i32) -> Result<*mut u8> {
-    let dirp = unsafe { c_fdopendir(fd) };
-    if dirp.is_null() {
-        Err(last_error())
-    } else {
-        Ok(dirp)
-    }
-}
+const ATTR_BIT_MAP_COUNT: u16 = 5;
+const ATTR_CMN_NAME: u32 = 0x0000_0001;
+const ATTR_CMN_OBJTYPE: u32 = 0x0000_0008;
+const ATTR_CMN_RETURNED_ATTRS: u32 = 0x8000_0000;
+const VREG: u32 = 1;
+const VDIR: u32 = 2;
+const VLNK: u32 = 5;
 
-pub fn dir_close(dirp: *mut u8) -> Result<()> {
-    cvt(unsafe { c_closedir(dirp) }).map(|_| ())
-}
-
-/// Read one entry into `name`; returns `(name_len, d_type)`.
-pub fn next_dir(dirp: *mut u8, name: &mut [u8]) -> Result<Option<(usize, u8)>> {
-    loop {
-        // readdir signals end-of-directory with a null return and errno 0,
-        // so clear errno first instead of trusting a stale value.
-        unsafe { *c_error() = 0 };
-        let entry = unsafe { c_readdir(dirp) };
-        if entry.is_null() {
-            let errno = unsafe { *c_error() };
-            if errno == 0 {
-                return Ok(None);
-            }
-            let error = map_errno(errno);
-            if error == Error::Interrupted {
-                continue;
-            }
-            return Err(error);
+/// Read one directory entry using `getattrlistbulk`, which uses a caller
+/// buffer and avoids the DIR/readdir allocator inside libSystem.
+pub fn next_dir(
+    fd: i32,
+    buffer: &mut [u8],
+    pos: &mut usize,
+    remaining: &mut usize,
+    name: &mut [u8],
+) -> Result<Option<(usize, u8)>> {
+    if *remaining == 0 {
+        let attr = AttrList {
+            bitmapcount: ATTR_BIT_MAP_COUNT,
+            reserved: 0,
+            commonattr: ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_NAME | ATTR_CMN_OBJTYPE,
+            volattr: 0,
+            dirattr: 0,
+            fileattr: 0,
+            forkattr: 0,
+        };
+        let count = cvt(unsafe {
+            c_getattrlistbulk(fd, &attr, buffer.as_ptr() as *mut c_void, buffer.len(), 0)
+        })?;
+        if count == 0 {
+            return Ok(None);
         }
-        let entry = unsafe { &*entry };
-        let name_len = entry.d_namlen as usize;
-        if name_len > name.len() {
-            return Err(Error::InvalidInput);
-        }
-        name[..name_len].copy_from_slice(&entry.d_name[..name_len]);
-        return Ok(Some((name_len, entry.d_type)));
+        *remaining = count as usize;
+        *pos = 0;
     }
+
+    let base = *pos;
+    if base + 4 > buffer.len() {
+        return Err(Error::InvalidInput);
+    }
+    let group_len = u32::from_ne_bytes([
+        buffer[base],
+        buffer[base + 1],
+        buffer[base + 2],
+        buffer[base + 3],
+    ]) as usize;
+    let group_end = base.checked_add(group_len).ok_or(Error::InvalidInput)?;
+    // group length, returned attribute set, name reference, object type
+    if group_len < 4 + 20 + 8 + 4 || group_end > buffer.len() {
+        return Err(Error::InvalidInput);
+    }
+
+    let name_ref_pos = base + 4 + 20;
+    let name_ref = AttrReference {
+        offset: i32::from_ne_bytes([
+            buffer[name_ref_pos],
+            buffer[name_ref_pos + 1],
+            buffer[name_ref_pos + 2],
+            buffer[name_ref_pos + 3],
+        ]),
+        length: u32::from_ne_bytes([
+            buffer[name_ref_pos + 4],
+            buffer[name_ref_pos + 5],
+            buffer[name_ref_pos + 6],
+            buffer[name_ref_pos + 7],
+        ]),
+    };
+    let obj_pos = name_ref_pos + 8;
+    let object = u32::from_ne_bytes([
+        buffer[obj_pos],
+        buffer[obj_pos + 1],
+        buffer[obj_pos + 2],
+        buffer[obj_pos + 3],
+    ]);
+    let name_start = (name_ref_pos as i64)
+        .checked_add(name_ref.offset as i64)
+        .ok_or(Error::InvalidInput)?;
+    let name_len = (name_ref.length as usize).saturating_sub(1);
+    if name_start < 0 || name_start as usize + name_len > buffer.len() || name_len > name.len() {
+        return Err(Error::InvalidInput);
+    }
+    name[..name_len].copy_from_slice(&buffer[name_start as usize..name_start as usize + name_len]);
+
+    *pos = group_end;
+    *remaining -= 1;
+    let dtype = match object {
+        VDIR => super::DT_DIR,
+        VLNK => super::DT_LNK,
+        VREG => super::DT_REG,
+        _ => 0,
+    };
+    Ok(Some((name_len, dtype)))
 }
 
 fn stat_to_info(stat: &Stat) -> FileInfo {

@@ -120,14 +120,12 @@ impl Drop for Poller {
 
 pub struct Dir {
     fd: i32,
-    #[cfg(target_os = "macos")]
-    dirp: *mut u8,
-    #[allow(dead_code)]
     buffer: [u8; DIR_BUFFER],
-    #[allow(dead_code)]
+    #[cfg(not(target_os = "macos"))]
     len: usize,
-    #[allow(dead_code)]
     pos: usize,
+    #[cfg(target_os = "macos")]
+    remaining: usize,
 }
 
 impl Drop for Listener {
@@ -150,18 +148,7 @@ impl Drop for File {
 
 impl Drop for Dir {
     fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
-        {
-            if self.dirp.is_null() {
-                let _ = abi::close(self.fd);
-            } else {
-                let _ = abi::dir_close(self.dirp);
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = abi::close(self.fd);
-        }
+        let _ = abi::close(self.fd);
     }
 }
 
@@ -217,33 +204,15 @@ impl Platform for Sys {
             match abi::open_dir(self.root()?, path) {
                 Err(Error::Interrupted) => continue,
                 Ok(fd) => {
-                    #[cfg(target_os = "macos")]
-                    {
-                        match abi::dir_open(fd) {
-                            Ok(dirp) => {
-                                return Ok(Dir {
-                                    fd,
-                                    dirp,
-                                    buffer: [0; DIR_BUFFER],
-                                    len: 0,
-                                    pos: 0,
-                                })
-                            }
-                            Err(error) => {
-                                let _ = abi::close(fd);
-                                return Err(error);
-                            }
-                        }
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        return Ok(Dir {
-                            fd,
-                            buffer: [0; DIR_BUFFER],
-                            len: 0,
-                            pos: 0,
-                        });
-                    }
+                    return Ok(Dir {
+                        fd,
+                        buffer: [0; DIR_BUFFER],
+                        #[cfg(not(target_os = "macos"))]
+                        len: 0,
+                        pos: 0,
+                        #[cfg(target_os = "macos")]
+                        remaining: 0,
+                    })
                 }
                 Err(error) => return Err(error),
             }
@@ -255,7 +224,13 @@ impl Platform for Sys {
         {
             loop {
                 let entry = loop {
-                    match abi::next_dir(dir.dirp, name) {
+                    match abi::next_dir(
+                        dir.fd,
+                        &mut dir.buffer,
+                        &mut dir.pos,
+                        &mut dir.remaining,
+                        name,
+                    ) {
                         Err(Error::Interrupted) => continue,
                         other => break other?,
                     }
