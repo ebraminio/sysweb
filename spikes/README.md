@@ -29,6 +29,12 @@ A nightly coroutine-per-connection prototype. It compares a linear
 records the pin/type/borrow problems that appear before it can live in a fixed
 slot.
 
+## `macos-startup`
+
+A size experiment replacing LC_MAIN `_main` with a custom `_start`. It stayed
+libSystem-only but made the binary 16 bytes larger, so the standard entry was
+kept.
+
 ## `download-c10k`
 
 A macOS-only download server with compact state (~2.3 KiB/connection),
