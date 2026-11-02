@@ -1,4 +1,4 @@
-//! Unix backends built directly on syscalls.
+//! Unix backends: Linux uses raw syscalls; macOS uses the public libSystem ABI.
 //!
 //! Shared ownership/lifetime logic lives here; `linux` and `darwin` only
 //! provide the raw syscall ABI (numbers, register convention, stat layout).

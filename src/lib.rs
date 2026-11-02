@@ -4,8 +4,8 @@
 //! * `core` only: no `std`, no `alloc`, no third-party crates;
 //! * on Linux the binary links no libc at all and enters via a hand-written
 //!   `_start`;
-//! * on macOS the binary makes raw BSD syscalls and imports no libc symbols;
-//!   libSystem is linked only because ld64 requires the load command;
+//! * on macOS the binary uses the public libSystem ABI, no CRT/`std`, and
+//!   imports only an allowlisted set of libSystem functions;
 //! * `unsafe` is confined to the syscall ABI modules;
 //! * every buffer is fixed-size and caller-provided.
 //!
